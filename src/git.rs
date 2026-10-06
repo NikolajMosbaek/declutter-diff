@@ -60,10 +60,15 @@ impl RangeSpec {
     }
 }
 
+/// The top-level directory of the working tree containing `dir`.
+pub fn repo_root(dir: &Path) -> Result<PathBuf> {
+    let top = git(dir, &["rev-parse", "--show-toplevel"]).context("not inside a git repository")?;
+    Ok(PathBuf::from(String::from_utf8(top)?.trim_end()))
+}
+
 /// Reads every changed file in the repository containing `dir`.
 pub fn load(dir: &Path, spec: &RangeSpec) -> Result<Vec<FileChange>> {
-    let top = git(dir, &["rev-parse", "--show-toplevel"]).context("not inside a git repository")?;
-    let root = PathBuf::from(String::from_utf8(top)?.trim_end());
+    let root = repo_root(dir)?;
 
     let old_rev = if spec.merge_base {
         let Side::Rev(new_rev) = &spec.new else {

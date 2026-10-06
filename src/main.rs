@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use anyhow::{Result, bail};
-use declutter::git::{RangeSpec, load};
+use declutter::git::{RangeSpec, load, repo_root};
 use declutter::pr::{CliLookup, resolve};
 use declutter::project::LayerMode;
 use declutter::review::{FileReview, Layers};
@@ -48,6 +48,7 @@ KEYS (viewer):
     i / l     cycle imports / logging statements: shown → hidden → only
     w         cycle formatting (whitespace-only) changes: shown → hidden → only
     v         collapse moved blocks to a one-line marker, or expand them again
+    o         open the file in $VISUAL / $EDITOR at the cursor's line
     q         quit
 ";
 
@@ -167,6 +168,7 @@ fn run() -> Result<()> {
         args.layers,
         ReviewStore::open(&dir),
         NoteStore::open(&dir),
+        repo_root(&dir)?,
     )
 }
 

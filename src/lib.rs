@@ -11,6 +11,7 @@
 
 pub mod classify;
 pub mod diff;
+pub mod editor;
 pub mod git;
 pub mod highlight;
 pub mod lang;

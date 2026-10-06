@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::Write;
 use std::ops::Range;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use anyhow::Result;
@@ -12,14 +13,15 @@ use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::diff::{Row, RowKind};
+use crate::editor::editor_command;
 use crate::highlight::Class;
 use crate::moves::{Direction, Moves, detect};
 use crate::project::LayerMode;
 use crate::render::{empty_message, file_title};
-use crate::review::{Detection, FileReview, Layers, Summary};
+use crate::review::{ChangeStatus, Detection, FileReview, Layers, Summary};
 use crate::store::{Note, NoteSide, NoteStore, ReviewStore};
 
-const HELP: &str = " ↑/↓ move   ←/→ switch pane   n/p file   space page   r reviewed   m note   E export notes   c comments   t tests   i imports   l logging   w formatting   v moves   q quit";
+const HELP: &str = " ↑/↓ move   ←/→ switch pane   n/p file   space page   r reviewed   m note   E export notes   c comments   t tests   i imports   l logging   w formatting   v moves   o open   q quit";
 
 /// The pane the arrow keys act on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +63,10 @@ pub struct App {
     moves: Moves,
     /// Show each moved block as its one-line marker only.
     pub collapse_moves: bool,
+    /// The working tree's top-level directory; changed paths are relative to it.
+    pub root: PathBuf,
+    /// A file and line to open in the editor, for the run loop to carry out.
+    pub open_request: Option<(PathBuf, usize)>,
     pub quit: bool,
     /// Height of the diff pane at the last draw, for paging and keeping the cursor visible.
     diff_height: usize,
@@ -97,6 +103,8 @@ impl App {
             clipboard: system_clipboard,
             moves: Moves::new(),
             collapse_moves: false,
+            root: PathBuf::from("."),
+            open_request: None,
             quit: false,
             diff_height: 20,
         };
@@ -175,6 +183,7 @@ impl App {
             KeyCode::Char('r') => self.toggle_reviewed(),
             KeyCode::Char('m') => self.open_note(),
             KeyCode::Char('E') => self.export_notes(),
+            KeyCode::Char('o') => self.request_open(),
             KeyCode::Char('t') => {
                 self.layers.tests = self.layers.tests.next();
                 self.refilter();
@@ -295,6 +304,42 @@ impl App {
             (false, Some(path)) => format!("saved {count} note{plural} to {}", path.display()),
             (false, None) => "could not copy or save the notes; run `declutter notes`".to_string(),
         });
+    }
+
+    /// Asks for the current file to be opened at the cursor's line, or, from the file
+    /// list, at its first change. A removed line opens at the nearest line still there.
+    fn request_open(&mut self) {
+        let Some(file) = self.current() else {
+            return;
+        };
+        if file.status == ChangeStatus::Deleted {
+            self.message = Some("the file was deleted; there is nothing to open".to_string());
+            return;
+        }
+        let path = self.root.join(&file.path);
+        let (_, anchors) = self.diff_view();
+        let new_line = |anchor: &Option<Anchor>| {
+            anchor
+                .as_ref()
+                .filter(|anchor| anchor.side == NoteSide::New)
+                .map(|anchor| anchor.line)
+        };
+        let from = if self.focus == Focus::Diff {
+            self.cursor
+        } else {
+            0
+        };
+        let line = anchors[from.min(anchors.len())..]
+            .iter()
+            .find_map(new_line)
+            .or_else(|| {
+                anchors[..from.min(anchors.len())]
+                    .iter()
+                    .rev()
+                    .find_map(new_line)
+            })
+            .unwrap_or(1);
+        self.open_request = Some((path, line));
     }
 
     fn cursor_anchor(&self) -> Option<(String, Anchor)> {
@@ -670,8 +715,10 @@ pub fn run(
     layers: Layers,
     store: ReviewStore,
     notes: NoteStore,
+    root: PathBuf,
 ) -> Result<()> {
     let mut app = App::with_stores(files, layers, store, notes);
+    app.root = root;
     ratatui::run(|terminal: &mut DefaultTerminal| -> Result<()> {
         while !app.quit {
             terminal.draw(|frame| draw(frame, &mut app))?;
@@ -680,7 +727,41 @@ pub fn run(
             {
                 app.handle_key(key);
             }
+            if let Some((path, line)) = app.open_request.take() {
+                app.message = open_in_editor(terminal, &path, line).err();
+            }
         }
         Ok(())
     })
+}
+
+/// Opens `path` at `line` in `$VISUAL` / `$EDITOR`. A terminal editor takes over the
+/// screen until it exits; anything else is launched alongside the viewer.
+fn open_in_editor(
+    terminal: &mut DefaultTerminal,
+    path: &std::path::Path,
+    line: usize,
+) -> Result<(), String> {
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let command = editor_command(editor.as_deref(), path, line);
+    let mut process = Command::new(&command.program);
+    process.args(&command.args);
+    let failed = |error: std::io::Error| format!("could not start `{}`: {error}", command.program);
+    if command.in_terminal {
+        ratatui::restore();
+        let status = process.status();
+        *terminal = ratatui::init();
+        status.map_err(failed)?;
+    } else {
+        process
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(failed)?;
+    }
+    Ok(())
 }

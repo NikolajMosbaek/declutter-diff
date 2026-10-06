@@ -60,6 +60,7 @@ Viewer keys:
 | `i` / `l` | cycle imports / logging: shown → hidden → only |
 | `w` | cycle formatting-only changes: shown → hidden → only |
 | `v` | collapse moved blocks to their one-line marker, or expand them |
+| `o` | open the file in `$VISUAL` / `$EDITOR` at the cursor's line |
 | `q` | quit (`Esc` leaves the diff first) |
 
 Layers combine: everything set to *hidden* is cut out together. A layer set to *only*
@@ -85,6 +86,11 @@ Notes are kept in `.git/declutter/notes.json` until you clear them. `E` copies t
 a prompt ("Please address these review comments… 1. `path:line`: note") and also saves it
 to `.git/declutter/review-notes.md`; `declutter notes` prints the same prompt and
 `declutter notes --clear` deletes the notes.
+
+`o` knows the line syntax of VS Code (and Cursor/Windsurf), Sublime, Zed, Helix, Vim/Neovim,
+nano, Emacs, micro, Xcode (`xed`) and JetBrains IDEs; terminal editors take over the screen
+until you quit them. With no editor set it uses the system opener. It opens the working-tree
+file, which is the reviewed version unless you're reviewing an older range.
 
 ## Test
 
