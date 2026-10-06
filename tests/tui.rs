@@ -92,7 +92,7 @@ fn arrow_keys_move_through_the_file_list_until_the_diff_has_focus() {
     app.handle_key(KeyEvent::from(KeyCode::Right));
     app.handle_key(KeyEvent::from(KeyCode::Down));
     assert_eq!(app.selected, 1);
-    assert_eq!(app.scroll, 1);
+    assert_eq!(app.cursor, 1);
 
     app.handle_key(KeyEvent::from(KeyCode::Left));
     app.handle_key(KeyEvent::from(KeyCode::Up));

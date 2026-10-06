@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::git::git;
 use crate::review::FileReview;
@@ -22,16 +23,8 @@ impl ReviewStore {
     /// Opens the store of the repository containing `dir`, or an in-memory one if the
     /// repository's git directory can't be found.
     pub fn open(dir: &Path) -> ReviewStore {
-        let common = git(
-            dir,
-            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-        )
-        .ok()
-        .and_then(|out| String::from_utf8(out).ok());
-        match common {
-            Some(common) => {
-                ReviewStore::at(PathBuf::from(common.trim()).join("declutter/reviewed.tsv"))
-            }
+        match state_dir(dir) {
+            Some(state) => ReviewStore::at(state.join("reviewed.tsv")),
             None => ReviewStore::in_memory(),
         }
     }
@@ -81,14 +74,137 @@ impl ReviewStore {
             .map(|(file, hash)| format!("{hash:016x}\t{file}"))
             .collect();
         lines.sort();
-        let dir = path
-            .parent()
-            .context("review store path has no directory")?;
-        fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        let tmp = path.with_extension("tsv.tmp");
-        fs::write(&tmp, lines.join("\n") + "\n")
-            .with_context(|| format!("writing {}", tmp.display()))?;
-        fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))
+        write_atomically(path, &(lines.join("\n") + "\n"))
+    }
+}
+
+/// `<git common dir>/declutter`: per-clone state, shared by worktrees, never committed.
+pub fn state_dir(dir: &Path) -> Option<PathBuf> {
+    let common = git(
+        dir,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .ok()?;
+    Some(PathBuf::from(String::from_utf8(common).ok()?.trim()).join("declutter"))
+}
+
+fn write_atomically(path: &Path, contents: &str) -> Result<()> {
+    let dir = path.parent().context("state file has no directory")?;
+    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, contents).with_context(|| format!("writing {}", tmp.display()))?;
+    fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))
+}
+
+/// Which version of the file a note's line number refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NoteSide {
+    /// A removed line: the number is in the old version.
+    Old,
+    New,
+}
+
+/// A reviewer's note on one line of a change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Note {
+    pub path: String,
+    pub side: NoteSide,
+    pub line: usize,
+    /// The line the note is about, so the note still makes sense once lines move.
+    pub code: String,
+    pub text: String,
+}
+
+/// Review notes, kept in `<git common dir>/declutter/notes.json` until cleared.
+pub struct NoteStore {
+    path: Option<PathBuf>,
+    notes: Vec<Note>,
+}
+
+impl NoteStore {
+    pub fn open(dir: &Path) -> NoteStore {
+        match state_dir(dir) {
+            Some(state) => NoteStore::at(state.join("notes.json")),
+            None => NoteStore::in_memory(),
+        }
+    }
+
+    pub fn at(path: PathBuf) -> NoteStore {
+        let notes = fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        NoteStore {
+            path: Some(path),
+            notes,
+        }
+    }
+
+    pub fn in_memory() -> NoteStore {
+        NoteStore {
+            path: None,
+            notes: Vec::new(),
+        }
+    }
+
+    pub fn notes(&self) -> &[Note] {
+        &self.notes
+    }
+
+    /// Where exported prompts are written, next to the notes themselves.
+    pub fn export_path(&self) -> Option<PathBuf> {
+        Some(self.path.as_ref()?.with_file_name("review-notes.md"))
+    }
+
+    pub fn find(&self, path: &str, side: NoteSide, line: usize) -> Option<&Note> {
+        self.notes
+            .iter()
+            .find(|note| note.path == path && note.side == side && note.line == line)
+    }
+
+    /// Adds or replaces the note on the same line; an empty text removes it.
+    pub fn set(&mut self, note: Note) -> Result<()> {
+        self.notes
+            .retain(|n| !(n.path == note.path && n.side == note.side && n.line == note.line));
+        if !note.text.trim().is_empty() {
+            self.notes.push(note);
+            self.notes
+                .sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
+        }
+        self.save()
+    }
+
+    pub fn clear(&mut self) -> Result<()> {
+        self.notes.clear();
+        self.save()
+    }
+
+    /// The notes as one prompt to hand to a coding agent.
+    pub fn prompt(&self) -> String {
+        let mut out = String::from(
+            "Please address these review comments. Line numbers refer to the version under review.\n",
+        );
+        for (i, note) in self.notes.iter().enumerate() {
+            let place = match note.side {
+                NoteSide::New => format!("`{}:{}`", note.path, note.line),
+                NoteSide::Old => format!("`{}` (removed line {})", note.path, note.line),
+            };
+            out.push_str(&format!(
+                "\n{}. {place}: {}\n   ```\n   {}\n   ```\n",
+                i + 1,
+                note.text.trim(),
+                note.code.trim()
+            ));
+        }
+        out
+    }
+
+    fn save(&self) -> Result<()> {
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
+        write_atomically(path, &serde_json::to_string_pretty(&self.notes)?)
     }
 }
 

@@ -6,7 +6,7 @@ use declutter::git::{RangeSpec, load};
 use declutter::pr::{CliLookup, resolve};
 use declutter::project::LayerMode;
 use declutter::review::{FileReview, Layers};
-use declutter::store::ReviewStore;
+use declutter::store::{NoteStore, ReviewStore};
 use declutter::{render, tui};
 
 const USAGE: &str = "\
@@ -15,11 +15,14 @@ declutter — review a diff with comments and tests shown, hidden, or on their o
 USAGE:
     declutter [OPTIONS] [REVISION | A..B | A...B]
     declutter [OPTIONS] pr <URL | NUMBER>
+    declutter notes [--clear]
 
     With no revision, compares HEAD against the working tree, untracked files included.
     `pr` takes a GitHub or Azure DevOps pull-request URL, or a PR number in the repository
     `origin` points at; it fetches the PR (no local branch is touched) and shows what the
     PR page shows. Uses the `gh` or `az` CLI to look the PR up.
+    `notes` prints the review notes left with `m` as one prompt for a coding agent;
+    `--clear` deletes them.
 
 OPTIONS:
     --staged             Compare against the index instead of the working tree
@@ -34,6 +37,8 @@ KEYS (viewer):
     → / ←     focus the diff / the file list (also Tab, Enter)
     n / p     next / previous file from either pane
     r         mark the file reviewed and go to the next one (again to unmark)
+    m         leave a note on the line under the cursor (in the diff pane)
+    E         copy all notes to the clipboard as a prompt for a coding agent
     space     page down; u up; g / G top / bottom
     c         cycle comments: hidden → only → shown
     t         cycle tests: shown → hidden → only
@@ -45,6 +50,7 @@ struct Args {
     staged: bool,
     layers: Layers,
     print: bool,
+    clear: bool,
 }
 
 fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
@@ -53,6 +59,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
         staged: false,
         layers: Layers::default(),
         print: false,
+        clear: false,
     };
     let mut raw = raw.peekable();
     while let Some(arg) = raw.next() {
@@ -73,6 +80,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
             }
             "--staged" | "--cached" => args.staged = true,
             "-p" | "--print" => args.print = true,
+            "--clear" => args.clear = true,
             "--comments" | "--tests" => {
                 let Some(value) = inline.or_else(|| raw.next()) else {
                     bail!("{flag} needs a value: hidden, only or shown");
@@ -98,6 +106,26 @@ fn run() -> Result<()> {
         return Ok(());
     };
     let dir = std::env::current_dir()?;
+    if args
+        .positionals
+        .first()
+        .is_some_and(|first| first == "notes")
+    {
+        let mut notes = NoteStore::open(&dir);
+        if args.clear {
+            let count = notes.notes().len();
+            notes.clear()?;
+            println!("Cleared {count} note{}.", if count == 1 { "" } else { "s" });
+        } else if notes.notes().is_empty() {
+            println!("No review notes. Press m on a diff line in the viewer to add one.");
+        } else {
+            print!("{}", notes.prompt());
+        }
+        return Ok(());
+    }
+    if args.clear {
+        bail!("--clear only applies to `declutter notes`");
+    }
     let spec = match args.positionals.as_slice() {
         [pr, target] if pr == "pr" => {
             if args.staged {
@@ -126,7 +154,12 @@ fn run() -> Result<()> {
     if !std::io::stdout().is_terminal() {
         bail!("stdout is not a terminal; use --print for text output");
     }
-    tui::run(files, args.layers, ReviewStore::open(&dir))
+    tui::run(
+        files,
+        args.layers,
+        ReviewStore::open(&dir),
+        NoteStore::open(&dir),
+    )
 }
 
 fn main() -> ExitCode {
