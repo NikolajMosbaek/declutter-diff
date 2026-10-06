@@ -1,0 +1,16 @@
+//! declutter: review a diff with its comments shown, hidden, or on their own.
+//!
+//! Each changed file is parsed with tree-sitter, its comments are located, and
+//! both versions are *projected* — comments removed, or everything but comments
+//! removed — before diffing. Diffing the projections, rather than hiding lines of
+//! a normal diff afterwards, is what makes comment-only hunks disappear and lets a
+//! line that changed code and a trailing comment show only the code change.
+
+pub mod classify;
+pub mod diff;
+pub mod git;
+pub mod lang;
+pub mod project;
+pub mod render;
+pub mod review;
+pub mod tui;

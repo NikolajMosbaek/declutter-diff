@@ -79,15 +79,28 @@ The prototype proves the core idea end to end and nothing more:
 
 - Input: a git revision range or the working tree.
 - Layers: **comments** only (including docstrings).
-- Languages: **Swift, TypeScript, Python**.
+- Languages: **Swift, TypeScript, Python** (JavaScript rides along on the TSX grammar).
 - Views: unified diff in a TUI with a comments on / off / only toggle and the hidden-count
   status line.
 - Correctness tests for the hard cases: comment-only hunks, code + trailing comment on one
-  line, multi-line block comments spanning a hunk boundary, docstrings, files that fail to
-  parse (fall back to a plain diff and say so).
+  line, multi-line block comments spanning a hunk boundary, docstrings, files with syntax
+  errors.
 
 Done when: reviewing a real AI-generated branch with comments toggled off shows only code
 changes, with correct line numbers, and toggling back restores the full diff.
+
+### Decisions made while building v0
+
+- **Syntax errors don't disable a file.** tree-sitter recovers from errors, and real-world
+  files often contain constructs a grammar doesn't know. Comments are still collected from
+  the recovered tree, and the file is marked *partial parse* so the reviewer knows a comment
+  near the error might be missed.
+- **Blank lines are layout when comments are hidden.** An added docstring or comment usually
+  brings a blank line with it; showing that blank line as a change is noise. With comments
+  hidden, added or removed blank lines are not shown as changes (context blank lines stay).
+- **Unsupported file types hide nothing** and are counted in the status line
+  ("comments not detected in N files").
+- **Default mode is comments hidden** — that is the point of opening the tool.
 
 ## Roadmap after v0
 
