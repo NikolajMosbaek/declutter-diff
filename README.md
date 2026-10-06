@@ -45,6 +45,7 @@ Viewer keys:
 | `n` / `p` | next / previous file from either pane |
 | `Space` / `PgDn`, `u` / `PgUp` | page the diff |
 | `g` / `G` | top / bottom of the diff |
+| `r` | mark the file reviewed and jump to the next unreviewed one (again to unmark) |
 | `c` | cycle comments: hidden → only → shown |
 | `t` | cycle tests: shown → hidden → only |
 | `q` | quit (`Esc` leaves the diff first) |
@@ -56,6 +57,10 @@ The status line always says what is hidden, e.g.
 whichever account those are signed in with is used. It fetches the PR's branches into
 `refs/declutter/pr/<n>/` — no local branch is created or moved — and shows the PR branch
 against its merge base, the same diff the PR page shows.
+
+Review marks are saved per repository in `.git/declutter/reviewed.tsv` (shared by
+worktrees, never committed). A mark belongs to the exact change, so a file you reviewed
+shows up unreviewed again as soon as a new commit touches it.
 
 ## Test
 

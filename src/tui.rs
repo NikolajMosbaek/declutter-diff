@@ -10,8 +10,9 @@ use crate::diff::RowKind;
 use crate::project::LayerMode;
 use crate::render::{empty_message, file_title};
 use crate::review::{Detection, FileReview, Layers, Summary};
+use crate::store::ReviewStore;
 
-const HELP: &str = " ↑/↓ move   ←/→ or Tab switch pane   n/p next/prev file   space/PgDn page   g/G top/bottom   c comments   t tests   q quit";
+const HELP: &str = " ↑/↓ move   ←/→ or Tab switch pane   n/p next/prev file   space/PgDn page   g/G top/bottom   r reviewed   c comments   t tests   q quit";
 
 /// The pane the arrow keys act on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +30,9 @@ pub struct App {
     pub selected: usize,
     pub scroll: usize,
     pub focus: Focus,
+    pub store: ReviewStore,
+    /// A one-off message for the status bar, cleared by the next key.
+    pub message: Option<String>,
     pub quit: bool,
     /// Height of the diff pane at the last draw, for paging and clamping.
     diff_height: usize,
@@ -36,6 +40,10 @@ pub struct App {
 
 impl App {
     pub fn new(files: Vec<FileReview>, layers: Layers) -> App {
+        App::with_store(files, layers, ReviewStore::in_memory())
+    }
+
+    pub fn with_store(files: Vec<FileReview>, layers: Layers, store: ReviewStore) -> App {
         let mut app = App {
             files,
             layers,
@@ -43,6 +51,8 @@ impl App {
             selected: 0,
             scroll: 0,
             focus: Focus::Files,
+            store,
+            message: None,
             quit: false,
             diff_height: 20,
         };
@@ -75,6 +85,7 @@ impl App {
 
     pub fn handle_key(&mut self, key: KeyEvent) {
         let page = (self.diff_height / 2).max(1);
+        self.message = None;
         match key.code {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
@@ -84,6 +95,7 @@ impl App {
                 self.layers.comments = self.layers.comments.next();
                 self.scroll = 0;
             }
+            KeyCode::Char('r') => self.toggle_reviewed(),
             KeyCode::Char('t') => {
                 self.layers.tests = self.layers.tests.next();
                 self.refilter();
@@ -116,6 +128,34 @@ impl App {
             KeyCode::Char('G') | KeyCode::End => self.scroll_to(usize::MAX),
             _ => {}
         }
+    }
+
+    /// Marks the current file reviewed and moves on to the next unreviewed one, or
+    /// clears the mark if it was already set.
+    fn toggle_reviewed(&mut self) {
+        let Some(&index) = self.visible.get(self.selected) else {
+            return;
+        };
+        let reviewed = !self.store.is_reviewed(&self.files[index]);
+        if let Err(error) = self.store.set_reviewed(&self.files[index], reviewed) {
+            self.message = Some(format!("could not save review marks: {error:#}"));
+        }
+        if reviewed
+            && let Some(next) = (self.selected + 1..self.visible.len())
+                .find(|&position| !self.store.is_reviewed(&self.files[self.visible[position]]))
+        {
+            self.select(next);
+        }
+    }
+
+    /// Reviewed and total counts over the listed files.
+    pub fn review_progress(&self) -> (usize, usize) {
+        let reviewed = self
+            .visible
+            .iter()
+            .filter(|&&index| self.store.is_reviewed(&self.files[index]))
+            .count();
+        (reviewed, self.visible.len())
     }
 
     fn select(&mut self, index: usize) {
@@ -200,8 +240,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         .map(|&index| {
             let file = &app.files[index];
             let visible = file.view(app.layers.comments).hunks.len();
-            let item = ListItem::new(format!("{} ({visible})", file_title(file)));
-            if visible == 0 { item.dim() } else { item }
+            let reviewed = app.store.is_reviewed(file);
+            let mark = if reviewed { "✓ " } else { "  " };
+            let item = ListItem::new(format!("{mark}{} ({visible})", file_title(file)));
+            if visible == 0 || reviewed {
+                item.dim()
+            } else {
+                item
+            }
         })
         .collect();
     let mut list_state =
@@ -228,7 +274,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         diff_area,
     );
 
-    let summary = Summary::new(&app.files, app.layers).status_line(app.layers);
+    let (reviewed, listed) = app.review_progress();
+    let summary = match &app.message {
+        Some(message) => message.clone(),
+        None => format!(
+            "{} · {reviewed}/{listed} reviewed",
+            Summary::new(&app.files, app.layers).status_line(app.layers)
+        ),
+    };
     frame.render_widget(
         Paragraph::new(format!(" {summary}")).style(Style::new().add_modifier(Modifier::REVERSED)),
         status,
@@ -248,8 +301,8 @@ fn pane(title: String, focused: bool) -> Block<'static> {
     }
 }
 
-pub fn run(files: Vec<FileReview>, layers: Layers) -> Result<()> {
-    let mut app = App::new(files, layers);
+pub fn run(files: Vec<FileReview>, layers: Layers, store: ReviewStore) -> Result<()> {
+    let mut app = App::with_store(files, layers, store);
     ratatui::run(|terminal: &mut DefaultTerminal| -> Result<()> {
         while !app.quit {
             terminal.draw(|frame| draw(frame, &mut app))?;

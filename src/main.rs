@@ -6,6 +6,7 @@ use declutter::git::{RangeSpec, load};
 use declutter::pr::{CliLookup, resolve};
 use declutter::project::LayerMode;
 use declutter::review::{FileReview, Layers};
+use declutter::store::ReviewStore;
 use declutter::{render, tui};
 
 const USAGE: &str = "\
@@ -32,6 +33,7 @@ KEYS (viewer):
     ↑ / ↓     move through the files, or scroll the diff when it has focus
     → / ←     focus the diff / the file list (also Tab, Enter)
     n / p     next / previous file from either pane
+    r         mark the file reviewed and go to the next one (again to unmark)
     space     page down; u up; g / G top / bottom
     c         cycle comments: hidden → only → shown
     t         cycle tests: shown → hidden → only
@@ -124,7 +126,7 @@ fn run() -> Result<()> {
     if !std::io::stdout().is_terminal() {
         bail!("stdout is not a terminal; use --print for text output");
     }
-    tui::run(files, args.layers)
+    tui::run(files, args.layers, ReviewStore::open(&dir))
 }
 
 fn main() -> ExitCode {

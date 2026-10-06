@@ -4,6 +4,7 @@ use crate::classify::classify;
 use crate::diff::{Hunk, RowKind, diff};
 use crate::lang::Lang;
 use crate::project::{LayerMode, project};
+use crate::store::fingerprint;
 use crate::test_files::is_test_file;
 
 /// Unchanged lines shown around each change.
@@ -77,6 +78,8 @@ pub struct FileReview {
     pub detection: Detection,
     /// The whole file is test code; the test layer is file-granular.
     pub is_test: bool,
+    /// Identifies this exact change (path and both versions) for review marks.
+    pub fingerprint: u64,
     views: [ModeView; 3],
 }
 
@@ -135,12 +138,14 @@ impl FileReview {
         });
 
         let is_test = is_test_file(&change.path, if new.is_empty() { old } else { new });
+        let fingerprint = fingerprint(&[&change.path, old, new]);
         FileReview {
             path: change.path,
             old_path: change.old_path,
             status: change.status,
             detection,
             is_test,
+            fingerprint,
             views,
         }
     }
