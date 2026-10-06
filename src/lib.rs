@@ -13,6 +13,7 @@ pub mod classify;
 pub mod diff;
 pub mod git;
 pub mod lang;
+pub mod pr;
 pub mod project;
 pub mod render;
 pub mod review;

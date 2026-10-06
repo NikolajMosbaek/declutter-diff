@@ -273,6 +273,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ratatui",
+ "serde_json",
  "similar",
  "tempfile",
  "tree-sitter",

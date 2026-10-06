@@ -29,6 +29,8 @@ declutter --staged           # HEAD vs index
 declutter main               # main vs working tree
 declutter main..feature      # two revisions
 declutter main...feature     # feature vs its merge base with main
+declutter pr 42               # PR 42 of the repository origin points at
+declutter pr <PR URL>         # a GitHub or Azure DevOps pull request
 declutter --print            # print instead of opening the viewer
 declutter -p --comments only # print only the comment changes
 declutter --tests hidden     # start with test files left out
@@ -49,6 +51,11 @@ Viewer keys:
 
 The status line always says what is hidden, e.g.
 `comments: hidden · tests: hidden · showing 7 of 12 hunks · 5 comment-only hunks hidden · 4 test files hidden`.
+
+`pr` looks the pull request up with the `gh` (GitHub) or `az` (Azure DevOps) CLI, so
+whichever account those are signed in with is used. It fetches the PR's branches into
+`refs/declutter/pr/<n>/` — no local branch is created or moved — and shows the PR branch
+against its merge base, the same diff the PR page shows.
 
 ## Test
 

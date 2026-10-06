@@ -205,7 +205,7 @@ fn decode(bytes: Option<Vec<u8>>) -> (Option<String>, bool) {
     }
 }
 
-fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
     let output = Command::new("git")
         .arg("-C")
         .arg(dir)

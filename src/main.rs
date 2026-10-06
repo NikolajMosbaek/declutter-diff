@@ -3,6 +3,7 @@ use std::process::ExitCode;
 
 use anyhow::{Result, bail};
 use declutter::git::{RangeSpec, load};
+use declutter::pr::{CliLookup, resolve};
 use declutter::project::LayerMode;
 use declutter::review::{FileReview, Layers};
 use declutter::{render, tui};
@@ -12,8 +13,12 @@ declutter — review a diff with comments and tests shown, hidden, or on their o
 
 USAGE:
     declutter [OPTIONS] [REVISION | A..B | A...B]
+    declutter [OPTIONS] pr <URL | NUMBER>
 
     With no revision, compares HEAD against the working tree, untracked files included.
+    `pr` takes a GitHub or Azure DevOps pull-request URL, or a PR number in the repository
+    `origin` points at; it fetches the PR (no local branch is touched) and shows what the
+    PR page shows. Uses the `gh` or `az` CLI to look the PR up.
 
 OPTIONS:
     --staged             Compare against the index instead of the working tree
@@ -34,7 +39,7 @@ KEYS (viewer):
 ";
 
 struct Args {
-    range: Option<String>,
+    positionals: Vec<String>,
     staged: bool,
     layers: Layers,
     print: bool,
@@ -42,7 +47,7 @@ struct Args {
 
 fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
     let mut args = Args {
-        range: None,
+        positionals: Vec::new(),
         staged: false,
         layers: Layers::default(),
         print: false,
@@ -80,8 +85,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
                 }
             }
             _ if arg.starts_with('-') => bail!("unknown option `{arg}` (see --help)"),
-            _ if args.range.is_some() => bail!("only one revision or range can be given"),
-            _ => args.range = Some(arg),
+            _ => args.positionals.push(arg),
         }
     }
     Ok(Some(args))
@@ -91,8 +95,20 @@ fn run() -> Result<()> {
     let Some(args) = parse_args(std::env::args().skip(1))? else {
         return Ok(());
     };
-    let spec = RangeSpec::parse(args.range.as_deref(), args.staged)?;
-    let files: Vec<FileReview> = load(&std::env::current_dir()?, &spec)?
+    let dir = std::env::current_dir()?;
+    let spec = match args.positionals.as_slice() {
+        [pr, target] if pr == "pr" => {
+            if args.staged {
+                bail!("--staged cannot be combined with `pr`");
+            }
+            resolve(&dir, target, &CliLookup)?
+        }
+        [pr] if pr == "pr" => bail!("`pr` needs a pull-request URL or number"),
+        [] => RangeSpec::parse(None, args.staged)?,
+        [range] => RangeSpec::parse(Some(range), args.staged)?,
+        _ => bail!("only one revision or range can be given"),
+    };
+    let files: Vec<FileReview> = load(&dir, &spec)?
         .into_iter()
         .map(FileReview::new)
         .collect();

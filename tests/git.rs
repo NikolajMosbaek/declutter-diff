@@ -1,39 +1,15 @@
+mod common;
+
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Command;
+
+use common::{git, isolated, write};
 
 use declutter::git::{RangeSpec, load};
 use declutter::project::LayerMode;
 use declutter::review::{ChangeStatus, FileReview};
 use tempfile::TempDir;
-
-/// Runs a command isolated from the user's git configuration.
-fn isolated(mut command: Command) -> Output {
-    command
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .output()
-        .expect("command runs")
-}
-
-fn git(dir: &Path, args: &[&str]) {
-    let mut command = Command::new("git");
-    command.arg("-C").arg(dir).args(args);
-    let output = isolated(command);
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn write(dir: &Path, path: &str, text: &str) {
-    fs::write(dir.join(path), text).expect("write fixture");
-}
 
 /// A repository with one commit, then a mix of comment-only and code changes on disk.
 fn repo() -> TempDir {
