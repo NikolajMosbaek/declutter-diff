@@ -39,6 +39,7 @@ OPTIONS:
     --logging <MODE>     Start logging statements in MODE: shown (default), hidden, only
     --formatting <MODE>  Start whitespace-only changes in MODE: shown (default), hidden, only
     -p, --print          Print the diff instead of opening the viewer
+    --no-syntax          Start with syntax colouring off (s toggles it)
     -h, --help           Show this help
     -V, --version        Show the version
 
@@ -54,6 +55,7 @@ KEYS (viewer; press ? for the full list):
     c t i l f   hide / show comments, tests, imports, logging, formatting
     C T I L F   show only that layer (again to go back)
     M           collapse moved blocks
+    s           syntax colouring on / off
     q           quit
 ";
 
@@ -64,6 +66,7 @@ struct Args {
     layers: Layers,
     print: bool,
     clear: bool,
+    syntax: bool,
 }
 
 fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
@@ -74,6 +77,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
         layers: Layers::default(),
         print: false,
         clear: false,
+        syntax: true,
     };
     let mut raw = raw.peekable();
     while let Some(arg) = raw.next() {
@@ -95,6 +99,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
             "--staged" | "--cached" => args.staged = true,
             "-p" | "--print" => args.print = true,
             "--clear" => args.clear = true,
+            "--no-syntax" => args.syntax = false,
             "--base" => {
                 let Some(value) = inline.or_else(|| raw.next()) else {
                     bail!("--base needs a branch");
@@ -178,6 +183,7 @@ fn run() -> Result<()> {
         NoteStore::open(&dir),
         repo_root(&dir)?,
         target.label,
+        args.syntax,
     )
 }
 

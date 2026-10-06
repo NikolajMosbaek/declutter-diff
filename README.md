@@ -78,6 +78,7 @@ Viewer keys:
 | `c` `t` `i` `l` `f` | hide / show comments, tests, imports, logging, formatting-only changes |
 | `C` `T` `I` `L` `F` | show only that layer; press again to go back |
 | `M` | collapse moved blocks to their one-line marker, or expand them |
+| `s` | syntax colouring on / off (`--no-syntax` starts with it off) |
 | `?` | every key |
 | `Esc` | back: leave the diff, close a prompt, clear the search |
 | `q` | quit |

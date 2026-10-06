@@ -15,8 +15,8 @@ use ratatui::{DefaultTerminal, Frame};
 
 use crate::diff::{Row, RowKind};
 use crate::editor::editor_command;
-use crate::highlight::Class;
 use crate::moves::{Direction, Moves, detect};
+use crate::palette::Palette;
 use crate::project::LayerMode;
 use crate::render::{empty_message, file_title};
 use crate::review::{ChangeStatus, Detection, FileReview, Layers, Summary};
@@ -72,6 +72,7 @@ const KEYS: [&[KeyGroup]; 2] = [
                 ("l  L", "logging"),
                 ("f  F", "formatting-only changes"),
                 ("M", "collapse moved blocks"),
+                ("s", "syntax colouring on / off"),
             ],
         ),
     ],
@@ -165,6 +166,9 @@ pub struct App {
     pub open_request: Option<(PathBuf, usize)>,
     /// What is being reviewed, shown over the file list: "origin/main...feature", "PR 7".
     pub title: String,
+    pub palette: Palette,
+    /// Colour code by syntax; off leaves only the diff's own colouring.
+    pub syntax: bool,
     pub quit: bool,
     /// Height of the diff pane at the last draw, for paging and keeping the cursor visible.
     diff_height: usize,
@@ -207,6 +211,8 @@ impl App {
             root: PathBuf::from("."),
             open_request: None,
             title: String::new(),
+            palette: Palette::TRUE_COLOR,
+            syntax: true,
             quit: false,
             diff_height: 20,
         };
@@ -331,6 +337,7 @@ impl App {
             KeyCode::Char('L') => self.toggle_only(Layer::Logging),
             KeyCode::Char('f') => self.toggle_hidden(Layer::Formatting),
             KeyCode::Char('F') => self.toggle_only(Layer::Formatting),
+            KeyCode::Char('s') => self.syntax = !self.syntax,
             KeyCode::Char('M') => {
                 let place = self.place();
                 self.collapse_moves = !self.collapse_moves;
@@ -797,7 +804,13 @@ impl App {
                 let anchor = anchor_of(row);
                 push(
                     &mut out,
-                    row_line(row, moved.is_some(), self.search.as_deref()),
+                    row_line(
+                        row,
+                        moved.is_some(),
+                        self.search.as_deref(),
+                        &self.palette,
+                        self.syntax,
+                    ),
                     anchor.clone(),
                     Some(row.text.clone()),
                 );
@@ -856,33 +869,64 @@ fn anchor_of(row: &Row) -> Option<Anchor> {
     })
 }
 
-fn row_line(row: &Row, moved: bool, search: Option<&str>) -> Line<'static> {
+/// One diff row: line numbers, sign, and the code coloured by syntax (when `syntax` is
+/// on and the file has a grammar), changed words and search matches.
+fn row_line(
+    row: &Row,
+    moved: bool,
+    search: Option<&str>,
+    palette: &Palette,
+    syntax: bool,
+) -> Line<'static> {
     let number = |n: Option<usize>| n.map_or("     ".to_string(), |n| format!("{n:>5}"));
-    let (sign, line, emphasis) = match (row.kind, moved) {
-        (RowKind::Context, _) => (' ', Style::new(), Style::new()),
+    let (sign, sign_colour, line, emphasis) = match (row.kind, moved) {
+        (RowKind::Context, _) => (' ', Color::Reset, Style::new(), Style::new()),
         // Moved lines get their own tint: nothing about them changed but their place.
-        (RowKind::Removed, true) => ('-', MOVED_AWAY, MOVED_AWAY),
-        (RowKind::Added, true) => ('+', MOVED_HERE, MOVED_HERE),
-        (RowKind::Removed, false) => ('-', REMOVED, REMOVED_EMPHASIS),
-        (RowKind::Added, false) => ('+', ADDED, ADDED_EMPHASIS),
+        (RowKind::Removed, true) => (
+            '-',
+            palette.moved_sign,
+            palette.moved_away,
+            palette.moved_away,
+        ),
+        (RowKind::Added, true) => (
+            '+',
+            palette.moved_sign,
+            palette.moved_here,
+            palette.moved_here,
+        ),
+        (RowKind::Removed, false) => (
+            '-',
+            palette.removed_sign,
+            palette.removed,
+            palette.removed_emphasis,
+        ),
+        (RowKind::Added, false) => (
+            '+',
+            palette.added_sign,
+            palette.added,
+            palette.added_emphasis,
+        ),
     };
-    // Without syntax colours, colour the text itself so the change still stands out.
-    let style = match row.kind {
-        RowKind::Removed if row.syntax.is_empty() => line.fg(Color::Red),
-        RowKind::Added if row.syntax.is_empty() => line.fg(Color::Green),
-        _ => line,
+    let coloured = syntax && !row.syntax.is_empty();
+    // Without syntax colours, colour the changed text itself so the change stands out.
+    let style = if coloured || row.kind == RowKind::Context {
+        line
+    } else {
+        line.fg(sign_colour)
     };
-    let marks: Vec<(Range<usize>, Style)> = row
+    let syntax_marks = row
         .syntax
         .iter()
-        .map(|(range, class)| (range.clone(), syntax_style(*class)))
+        .filter(|_| coloured)
+        .filter_map(|(range, class)| Some((range.clone(), palette.syntax(*class)?)));
+    let marks: Vec<(Range<usize>, Style)> = syntax_marks
         .chain(row.emphasis.iter().map(|range| (range.clone(), emphasis)))
         .chain(
             search
                 .map(|query| find_all(&row.text, query))
                 .unwrap_or_default()
                 .into_iter()
-                .map(|range| (range, SEARCH_MATCH)),
+                .map(|range| (range, palette.search)),
         )
         .collect();
     let mut spans = vec![
@@ -890,46 +934,13 @@ fn row_line(row: &Row, moved: bool, search: Option<&str>) -> Line<'static> {
             format!("{} {} ", number(row.old_line), number(row.new_line)),
             Style::new().add_modifier(Modifier::DIM),
         ),
-        Span::styled(format!("{sign} "), style.fg(sign_colour(row.kind)).bold()),
+        Span::styled(
+            format!("{sign} "),
+            line.fg(sign_colour).add_modifier(Modifier::BOLD),
+        ),
     ];
     spans.extend(styled_segments(&row.text, style, &marks));
     Line::from(spans)
-}
-
-// 256-colour backgrounds, so terminals without true colour (Terminal.app) show them too.
-const SEARCH_MATCH: Style = Style::new().fg(Color::Black).bg(Color::Yellow);
-const MOVED_AWAY: Style = Style::new().bg(Color::Indexed(53));
-const MOVED_HERE: Style = Style::new().bg(Color::Indexed(23));
-const REMOVED: Style = Style::new().bg(Color::Indexed(52));
-const ADDED: Style = Style::new().bg(Color::Indexed(22));
-const REMOVED_EMPHASIS: Style = Style::new()
-    .bg(Color::Indexed(88))
-    .add_modifier(Modifier::BOLD);
-const ADDED_EMPHASIS: Style = Style::new()
-    .bg(Color::Indexed(28))
-    .add_modifier(Modifier::BOLD);
-
-fn sign_colour(kind: RowKind) -> Color {
-    match kind {
-        RowKind::Removed => Color::Red,
-        RowKind::Added => Color::Green,
-        RowKind::Context => Color::Reset,
-    }
-}
-
-/// Named colours, so the viewer follows the terminal's own theme.
-fn syntax_style(class: Class) -> Style {
-    match class {
-        Class::Keyword => Style::new().fg(Color::Magenta),
-        Class::String => Style::new().fg(Color::Yellow),
-        Class::Comment => Style::new()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::ITALIC),
-        Class::Number | Class::Constant => Style::new().fg(Color::Cyan),
-        Class::Type => Style::new().fg(Color::LightCyan),
-        Class::Function => Style::new().fg(Color::LightBlue),
-        Class::Attribute => Style::new().fg(Color::LightMagenta),
-    }
 }
 
 /// Splits `text` into spans, each styled by `base` patched with every layer covering it.
@@ -1165,10 +1176,13 @@ pub fn run(
     notes: NoteStore,
     root: PathBuf,
     title: String,
+    syntax: bool,
 ) -> Result<()> {
     let mut app = App::with_stores(files, layers, store, notes);
     app.root = root;
     app.title = title;
+    app.palette = Palette::detect();
+    app.syntax = syntax;
     ratatui::run(|terminal: &mut DefaultTerminal| -> Result<()> {
         while !app.quit {
             terminal.draw(|frame| draw(frame, &mut app))?;
