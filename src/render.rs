@@ -2,20 +2,19 @@ use std::fmt::Write;
 
 use crate::diff::RowKind;
 use crate::project::LayerMode;
-use crate::review::{Detection, FileReview, Layers, Summary};
+use crate::review::{Detection, FileReview, Layers, SpanModes, Summary};
 
 /// The decluttered diff as plain text. Line numbers in hunk headers refer to the
 /// original files, so the output is for reading, not for `git apply`.
 pub fn plain(files: &[FileReview], layers: Layers) -> String {
-    let mode = layers.comments;
     let mut out = String::new();
     for file in files.iter().filter(|file| file.is_visible(layers.tests)) {
-        let view = file.view(mode);
+        let view = file.view(layers);
         let _ = writeln!(out, "{} [{}]", file_title(file), file.tag());
         if file.detection == Detection::Binary {
             let _ = writeln!(out, "  (binary file not shown)");
         } else if view.hunks.is_empty() {
-            let _ = writeln!(out, "  ({})", empty_message(file, mode));
+            let _ = writeln!(out, "  ({})", empty_message(file, layers.into()));
         }
         for hunk in &view.hunks {
             let _ = writeln!(out, "{}", hunk.header());
@@ -41,16 +40,17 @@ pub fn file_title(file: &FileReview) -> String {
     }
 }
 
-/// Why a file with changes shows nothing in this mode.
-pub fn empty_message(file: &FileReview, mode: LayerMode) -> String {
-    let hidden = file.view(mode).hidden_hunks;
-    match mode {
+/// Why a file with changes shows nothing under these layers.
+pub fn empty_message(file: &FileReview, modes: SpanModes) -> String {
+    let hidden = file.view(modes).hidden_hunks;
+    let adjective = modes.adjective();
+    match modes.effective().0 {
         _ if file.total_hunks() == 0 => "no textual changes".to_string(),
         LayerMode::Hidden => format!(
-            "comment-only changes: {hidden} hunk{} hidden",
+            "{adjective}-only changes: {hidden} hunk{} hidden",
             if hidden == 1 { "" } else { "s" }
         ),
-        LayerMode::Only => "no comment changes".to_string(),
+        LayerMode::Only => format!("no {adjective} changes"),
         LayerMode::Shown => "no changes".to_string(),
     }
 }

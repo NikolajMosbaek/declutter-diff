@@ -252,7 +252,7 @@ fn status_line_reports_what_is_hidden() {
 
     assert_eq!(
         Summary::new(&files, Layers::default()).status_line(Layers::default()),
-        "comments: hidden · tests: shown · showing 2 of 3 hunks · 1 comment-only hunk hidden · 1 comment-only file · comments not detected in 1 file"
+        "comments: hidden · showing 2 of 3 hunks · 1 comment-only hunk hidden · 1 comment-only file · no grammar for 1 file"
     );
 }
 

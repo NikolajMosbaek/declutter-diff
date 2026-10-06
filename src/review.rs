@@ -1,6 +1,9 @@
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
+use std::rc::Rc;
 
-use crate::classify::classify;
+use crate::classify::{Classified, classify};
 use crate::diff::{Hunk, RowKind, diff};
 use crate::highlight::annotate;
 use crate::lang::Lang;
@@ -41,13 +44,13 @@ pub struct FileChange {
     pub binary: bool,
 }
 
-/// How well declutter could find the comments in a file.
+/// How well declutter could find the layers in a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Detection {
     Parsed(Lang),
-    /// Parsed with syntax errors; comments near an error may be missed.
+    /// Parsed with syntax errors; layers near an error may be missed.
     Partial(Lang),
-    /// No grammar for this file type, so nothing is hidden.
+    /// No grammar for this file type, so nothing but whole test files is hidden.
     Unsupported,
     Binary,
 }
@@ -57,8 +60,106 @@ impl Detection {
         match self {
             Detection::Parsed(lang) => lang.name().to_string(),
             Detection::Partial(lang) => format!("{}, partial parse", lang.name()),
-            Detection::Unsupported => "comments not detected".to_string(),
+            Detection::Unsupported => "no grammar".to_string(),
             Detection::Binary => "binary".to_string(),
+        }
+    }
+}
+
+/// A layer made of spans inside a file, as opposed to the file-level test layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpanLayer {
+    Comments,
+    Imports,
+    Logging,
+}
+
+impl SpanLayer {
+    pub const ALL: [SpanLayer; 3] = [SpanLayer::Comments, SpanLayer::Imports, SpanLayer::Logging];
+
+    /// The adjective used in messages: "comment-only hunks".
+    pub fn adjective(self) -> &'static str {
+        match self {
+            SpanLayer::Comments => "comment",
+            SpanLayer::Imports => "import",
+            SpanLayer::Logging => "logging",
+        }
+    }
+
+    fn spans(self, classified: &Classified) -> &[Range<usize>] {
+        match self {
+            SpanLayer::Comments => &classified.comments,
+            SpanLayer::Imports => &classified.imports,
+            SpanLayer::Logging => &classified.logging,
+        }
+    }
+}
+
+/// The modes of the span layers: the part of `Layers` that changes a file's diff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SpanModes {
+    pub comments: LayerMode,
+    pub imports: LayerMode,
+    pub logging: LayerMode,
+}
+
+impl SpanModes {
+    pub const SHOWN: SpanModes = SpanModes {
+        comments: LayerMode::Shown,
+        imports: LayerMode::Shown,
+        logging: LayerMode::Shown,
+    };
+
+    pub fn mode(self, layer: SpanLayer) -> LayerMode {
+        match layer {
+            SpanLayer::Comments => self.comments,
+            SpanLayer::Imports => self.imports,
+            SpanLayer::Logging => self.logging,
+        }
+    }
+
+    /// How the file is projected: any layer set to *only* wins, and shows the union of
+    /// those layers; otherwise the hidden layers are cut out.
+    pub fn effective(self) -> (LayerMode, Vec<SpanLayer>) {
+        for mode in [LayerMode::Only, LayerMode::Hidden] {
+            let layers: Vec<SpanLayer> = SpanLayer::ALL
+                .into_iter()
+                .filter(|&layer| self.mode(layer) == mode)
+                .collect();
+            if !layers.is_empty() {
+                return (mode, layers);
+            }
+        }
+        (LayerMode::Shown, Vec::new())
+    }
+
+    /// "comment", "comment/import": the layers the projection acts on.
+    pub fn adjective(self) -> String {
+        let (_, layers) = self.effective();
+        layers
+            .iter()
+            .map(|layer| layer.adjective())
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+}
+
+/// Just the comment layer set; the rest shown.
+impl From<LayerMode> for SpanModes {
+    fn from(comments: LayerMode) -> SpanModes {
+        SpanModes {
+            comments,
+            ..SpanModes::SHOWN
+        }
+    }
+}
+
+impl From<Layers> for SpanModes {
+    fn from(layers: Layers) -> SpanModes {
+        SpanModes {
+            comments: layers.comments,
+            imports: layers.imports,
+            logging: layers.logging,
         }
     }
 }
@@ -70,7 +171,7 @@ pub struct ModeView {
     pub hidden_hunks: usize,
 }
 
-/// A changed file, diffed once per comment mode.
+/// A changed file. Its diff under each choice of layers is computed on first use.
 #[derive(Debug, Clone)]
 pub struct FileReview {
     pub path: String,
@@ -81,19 +182,27 @@ pub struct FileReview {
     pub is_test: bool,
     /// Identifies this exact change (path and both versions) for review marks.
     pub fingerprint: u64,
-    views: [ModeView; 3],
+    old: String,
+    new: String,
+    old_layers: Classified,
+    new_layers: Classified,
+    views: RefCell<HashMap<SpanModes, Rc<ModeView>>>,
 }
 
 impl FileReview {
     pub fn new(change: FileChange) -> FileReview {
-        let old = change.old.as_deref().unwrap_or("");
-        let new = change.new.as_deref().unwrap_or("");
+        let old = change.old.unwrap_or_default();
+        let new = change.new.unwrap_or_default();
 
-        let (detection, old_comments, new_comments) = if change.binary {
-            (Detection::Binary, Vec::new(), Vec::new())
+        let (detection, old_layers, new_layers) = if change.binary {
+            (
+                Detection::Binary,
+                Classified::default(),
+                Classified::default(),
+            )
         } else {
             match Lang::from_path(&change.path)
-                .and_then(|lang| Some((lang, classify(lang, old)?, classify(lang, new)?)))
+                .and_then(|lang| Some((lang, classify(lang, &old)?, classify(lang, &new)?)))
             {
                 Some((lang, old_c, new_c)) => {
                     let detection = if old_c.partial || new_c.partial {
@@ -101,51 +210,18 @@ impl FileReview {
                     } else {
                         Detection::Parsed(lang)
                     };
-                    (detection, old_c.comments, new_c.comments)
+                    (detection, old_c, new_c)
                 }
-                None => (Detection::Unsupported, Vec::new(), Vec::new()),
+                None => (
+                    Detection::Unsupported,
+                    Classified::default(),
+                    Classified::default(),
+                ),
             }
         };
 
-        let lang = match detection {
-            Detection::Parsed(lang) | Detection::Partial(lang) => Some(lang),
-            _ => None,
-        };
-        let hunks_for = |mode: LayerMode| {
-            let mut old_view = project(old, &old_comments, mode);
-            let mut new_view = project(new, &new_comments, mode);
-            if let Some(lang) = lang {
-                annotate(&mut old_view, lang);
-                annotate(&mut new_view, lang);
-            }
-            let mut hunks = diff(&old_view, &new_view, CONTEXT);
-            if mode == LayerMode::Hidden {
-                // Added or removed blank lines are layout: they mostly travel with a
-                // comment, and they never change what the code does.
-                for hunk in &mut hunks {
-                    hunk.rows
-                        .retain(|row| row.kind == RowKind::Context || !row.text.trim().is_empty());
-                }
-                hunks.retain(|hunk| hunk.changed().next().is_some());
-            }
-            hunks
-        };
-
-        let full = hunks_for(LayerMode::Shown);
-        let views = LayerMode::ALL.map(|mode| {
-            let hunks = if mode == LayerMode::Shown {
-                full.clone()
-            } else {
-                hunks_for(mode)
-            };
-            ModeView {
-                hidden_hunks: count_hidden(&full, &hunks),
-                hunks,
-            }
-        });
-
-        let is_test = is_test_file(&change.path, if new.is_empty() { old } else { new });
-        let fingerprint = fingerprint(&[&change.path, old, new]);
+        let is_test = is_test_file(&change.path, if new.is_empty() { &old } else { &new });
+        let fingerprint = fingerprint(&[&change.path, &old, &new]);
         FileReview {
             path: change.path,
             old_path: change.old_path,
@@ -153,16 +229,65 @@ impl FileReview {
             detection,
             is_test,
             fingerprint,
-            views,
+            old,
+            new,
+            old_layers,
+            new_layers,
+            views: RefCell::new(HashMap::new()),
         }
     }
 
-    pub fn view(&self, mode: LayerMode) -> &ModeView {
-        &self.views[mode.index()]
+    pub fn view(&self, modes: impl Into<SpanModes>) -> Rc<ModeView> {
+        let modes = modes.into();
+        if let Some(view) = self.views.borrow().get(&modes) {
+            return Rc::clone(view);
+        }
+        let hunks = self.hunks_for(modes);
+        let hidden_hunks = if modes == SpanModes::SHOWN {
+            0
+        } else {
+            count_hidden(&self.view(SpanModes::SHOWN).hunks, &hunks)
+        };
+        let view = Rc::new(ModeView {
+            hunks,
+            hidden_hunks,
+        });
+        self.views.borrow_mut().insert(modes, Rc::clone(&view));
+        view
+    }
+
+    fn hunks_for(&self, modes: SpanModes) -> Vec<Hunk> {
+        let (mode, layers) = modes.effective();
+        let lang = match self.detection {
+            Detection::Parsed(lang) | Detection::Partial(lang) => Some(lang),
+            _ => None,
+        };
+        let side = |src: &str, classified: &Classified| {
+            let mut projection = project(src, &union(classified, &layers), mode);
+            if let Some(lang) = lang {
+                annotate(&mut projection, lang);
+            }
+            projection
+        };
+        let mut hunks = diff(
+            &side(&self.old, &self.old_layers),
+            &side(&self.new, &self.new_layers),
+            CONTEXT,
+        );
+        if mode == LayerMode::Hidden {
+            // Added or removed blank lines are layout: they mostly travel with whatever
+            // was hidden, and they never change what the code does.
+            for hunk in &mut hunks {
+                hunk.rows
+                    .retain(|row| row.kind == RowKind::Context || !row.text.trim().is_empty());
+            }
+            hunks.retain(|hunk| hunk.changed().next().is_some());
+        }
+        hunks
     }
 
     pub fn total_hunks(&self) -> usize {
-        self.view(LayerMode::Shown).hunks.len()
+        self.view(SpanModes::SHOWN).hunks.len()
     }
 
     /// Whether the file is listed at all under this test-layer mode.
@@ -183,6 +308,23 @@ impl FileReview {
             detection
         }
     }
+}
+
+/// The spans of `layers`, merged into one sorted, non-overlapping list.
+fn union(classified: &Classified, layers: &[SpanLayer]) -> Vec<Range<usize>> {
+    let mut spans: Vec<Range<usize>> = layers
+        .iter()
+        .flat_map(|layer| layer.spans(classified).iter().cloned())
+        .collect();
+    spans.sort_by_key(|span| span.start);
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(spans.len());
+    for span in spans {
+        match merged.last_mut() {
+            Some(last) if span.start <= last.end => last.end = last.end.max(span.end),
+            _ => merged.push(span),
+        }
+    }
+    merged
 }
 
 /// Counts hunks of the full diff none of whose changed lines are still changed in `visible`.
@@ -211,6 +353,8 @@ fn count_hidden(full: &[Hunk], visible: &[Hunk]) -> usize {
 pub struct Layers {
     pub comments: LayerMode,
     pub tests: LayerMode,
+    pub imports: LayerMode,
+    pub logging: LayerMode,
 }
 
 impl Default for Layers {
@@ -218,6 +362,8 @@ impl Default for Layers {
         Layers {
             comments: LayerMode::Hidden,
             tests: LayerMode::Shown,
+            imports: LayerMode::Shown,
+            logging: LayerMode::Shown,
         }
     }
 }
@@ -229,7 +375,7 @@ pub struct Summary {
     pub total_hunks: usize,
     pub visible_hunks: usize,
     pub hidden_hunks: usize,
-    /// Files with changes, none of them visible in this comment mode.
+    /// Files with changes, none of them visible under these layers.
     pub fully_hidden_files: usize,
     /// Files left out by the test layer: test files when hidden, the rest when only.
     pub filtered_files: usize,
@@ -245,7 +391,7 @@ impl Summary {
                 summary.filtered_files += 1;
                 continue;
             }
-            let view = file.view(layers.comments);
+            let view = file.view(layers);
             summary.files += 1;
             summary.total_hunks += file.total_hunks();
             summary.visible_hunks += view.hunks.len();
@@ -263,11 +409,25 @@ impl Summary {
     }
 
     pub fn status_line(&self, layers: Layers) -> String {
-        let mut parts = vec![
-            format!("comments: {}", layers.comments.label()),
-            format!("tests: {}", layers.tests.label()),
-        ];
-        match layers.comments {
+        let states: Vec<String> = [
+            ("comments", layers.comments),
+            ("tests", layers.tests),
+            ("imports", layers.imports),
+            ("logging", layers.logging),
+        ]
+        .into_iter()
+        .filter(|(_, mode)| *mode != LayerMode::Shown)
+        .map(|(name, mode)| format!("{name}: {}", mode.label()))
+        .collect();
+        let mut parts = if states.is_empty() {
+            vec!["all layers shown".to_string()]
+        } else {
+            states
+        };
+
+        let modes = SpanModes::from(layers);
+        let adjective = modes.adjective();
+        match modes.effective().0 {
             LayerMode::Shown => parts.push(format!(
                 "{} {} in {} {}",
                 self.total_hunks,
@@ -281,13 +441,13 @@ impl Summary {
                     self.visible_hunks, self.total_hunks
                 ));
                 parts.push(format!(
-                    "{} comment-only {} hidden",
+                    "{} {adjective}-only {} hidden",
                     self.hidden_hunks,
                     plural(self.hidden_hunks, "hunk")
                 ));
                 if self.fully_hidden_files > 0 {
                     parts.push(format!(
-                        "{} comment-only {}",
+                        "{} {adjective}-only {}",
                         self.fully_hidden_files,
                         plural(self.fully_hidden_files, "file")
                     ));
@@ -295,12 +455,12 @@ impl Summary {
             }
             LayerMode::Only => {
                 parts.push(format!(
-                    "{} {} with comment changes",
+                    "{} {} with {adjective} changes",
                     self.visible_hunks,
                     plural(self.visible_hunks, "hunk")
                 ));
                 parts.push(format!(
-                    "{} code-only {} hidden",
+                    "{} other {} hidden",
                     self.hidden_hunks,
                     plural(self.hidden_hunks, "hunk")
                 ));
@@ -321,7 +481,7 @@ impl Summary {
         }
         if self.unsupported_files > 0 {
             parts.push(format!(
-                "comments not detected in {} {}",
+                "no grammar for {} {}",
                 self.unsupported_files,
                 plural(self.unsupported_files, "file")
             ));

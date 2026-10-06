@@ -52,7 +52,7 @@ fn pressing_c_cycles_through_the_comment_modes() {
 
     app.handle_key(KeyEvent::from(KeyCode::Char('c')));
     let shown = screen(&mut app);
-    assert!(shown.contains("comments: shown"), "{shown}");
+    assert!(shown.contains("all layers shown"), "{shown}");
     assert!(
         shown.contains("+ // Fraction.") && shown.contains("+ const rate = 0.05;"),
         "{shown}"

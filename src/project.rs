@@ -3,7 +3,7 @@ use std::ops::Range;
 use crate::highlight::LineClasses;
 
 /// What the reviewer sees of a layer: all of it, none of it, or only it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LayerMode {
     Shown,
     Hidden,
@@ -33,14 +33,6 @@ impl LayerMode {
         LayerMode::ALL
             .into_iter()
             .find(|mode| mode.label() == value)
-    }
-
-    pub(crate) fn index(self) -> usize {
-        match self {
-            LayerMode::Shown => 0,
-            LayerMode::Hidden => 1,
-            LayerMode::Only => 2,
-        }
     }
 }
 

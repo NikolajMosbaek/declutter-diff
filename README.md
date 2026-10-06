@@ -5,12 +5,15 @@ See [prod.md](prod.md) for the idea, the design and the roadmap.
 
 ## Status
 
-Prototype: two layers.
+Prototype: four layers, each shown, hidden or shown on its own.
 
 - **Comments** (and Python docstrings) in Swift, TypeScript/TSX, JavaScript and Python.
 - **Tests**, per file: test directories and file-name conventions in any language
   (`Tests/`, `FooTests/`, `__tests__/`, `FooTests.swift`, `foo.test.ts`, `test_foo.py`, …),
   plus Swift, Python and TypeScript files that import a test framework.
+- **Imports**: `import` statements (and `export … from` re-exports).
+- **Logging**: statements that only log — `print(…)`, `NSLog`, `os_log`, `console.*(…)`, and
+  `debug/info/warn/error/…` calls on a `logger`, `log`, `logging` or `console` receiver.
 
 ## Build
 
@@ -34,6 +37,7 @@ declutter pr <PR URL>         # a GitHub or Azure DevOps pull request
 declutter --print            # print instead of opening the viewer
 declutter -p --comments only # print only the comment changes
 declutter --tests hidden     # start with test files left out
+declutter --logging only     # start with only the logging changes
 ```
 
 Viewer keys:
@@ -50,7 +54,11 @@ Viewer keys:
 | `E` | copy all notes to the clipboard as one prompt for a coding agent |
 | `c` | cycle comments: hidden → only → shown |
 | `t` | cycle tests: shown → hidden → only |
+| `i` / `l` | cycle imports / logging: shown → hidden → only |
 | `q` | quit (`Esc` leaves the diff first) |
+
+Layers combine: everything set to *hidden* is cut out together. A layer set to *only*
+wins — with comments on *only* you see just the comment changes, whatever else is hidden.
 
 The status line always says what is hidden, e.g.
 `comments: hidden · tests: hidden · showing 7 of 12 hunks · 5 comment-only hunks hidden · 4 test files hidden`.

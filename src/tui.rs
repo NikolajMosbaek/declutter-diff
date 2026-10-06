@@ -18,7 +18,7 @@ use crate::render::{empty_message, file_title};
 use crate::review::{Detection, FileReview, Layers, Summary};
 use crate::store::{Note, NoteSide, NoteStore, ReviewStore};
 
-const HELP: &str = " ↑/↓ move   ←/→ switch pane   n/p file   space page   r reviewed   m note   E export notes   c comments   t tests   q quit";
+const HELP: &str = " ↑/↓ move   ←/→ switch pane   n/p file   space page   r reviewed   m note   E export notes   c comments   t tests   i imports   l logging   q quit";
 
 /// The pane the arrow keys act on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,8 +148,16 @@ impl App {
                 self.layers.tests = self.layers.tests.next();
                 self.refilter();
             }
-            KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter => self.focus = Focus::Diff,
-            KeyCode::Left | KeyCode::Char('h') => self.focus = Focus::Files,
+            KeyCode::Char('i') => {
+                self.layers.imports = self.layers.imports.next();
+                self.reset_diff_position();
+            }
+            KeyCode::Char('l') => {
+                self.layers.logging = self.layers.logging.next();
+                self.reset_diff_position();
+            }
+            KeyCode::Right | KeyCode::Enter => self.focus = Focus::Diff,
+            KeyCode::Left => self.focus = Focus::Files,
             KeyCode::Tab | KeyCode::BackTab => {
                 self.focus = match self.focus {
                     Focus::Files => Focus::Diff,
@@ -323,15 +331,14 @@ impl App {
                 (false, _) => "No test files changed. Press t to cycle the test layer.".to_string(),
             });
         };
-        let mode = self.layers.comments;
-        let view = file.view(mode);
+        let view = file.view(self.layers);
         if file.detection == Detection::Binary {
             return message("Binary file not shown.".to_string());
         }
         if view.hunks.is_empty() {
             return message(format!(
                 "No visible changes: {}.",
-                empty_message(file, mode)
+                empty_message(file, self.layers.into())
             ));
         }
 
@@ -481,7 +488,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         .iter()
         .map(|&index| {
             let file = &app.files[index];
-            let visible = file.view(app.layers.comments).hunks.len();
+            let visible = file.view(app.layers).hunks.len();
             let reviewed = app.store.is_reviewed(file);
             let mark = if reviewed { "✓ " } else { "  " };
             let item = ListItem::new(format!("{mark}{} ({visible})", file_title(file)));

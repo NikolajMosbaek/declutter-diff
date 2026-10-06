@@ -28,6 +28,8 @@ OPTIONS:
     --staged             Compare against the index instead of the working tree
     --comments <MODE>    Start comments in MODE: hidden (default), only, shown
     --tests <MODE>       Start tests in MODE: shown (default), hidden, only
+    --imports <MODE>     Start imports in MODE: shown (default), hidden, only
+    --logging <MODE>     Start logging statements in MODE: shown (default), hidden, only
     -p, --print          Print the diff instead of opening the viewer
     -h, --help           Show this help
     -V, --version        Show the version
@@ -42,6 +44,7 @@ KEYS (viewer):
     space     page down; u up; g / G top / bottom
     c         cycle comments: hidden → only → shown
     t         cycle tests: shown → hidden → only
+    i / l     cycle imports / logging statements: shown → hidden → only
     q         quit
 ";
 
@@ -81,17 +84,18 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
             "--staged" | "--cached" => args.staged = true,
             "-p" | "--print" => args.print = true,
             "--clear" => args.clear = true,
-            "--comments" | "--tests" => {
+            "--comments" | "--tests" | "--imports" | "--logging" => {
                 let Some(value) = inline.or_else(|| raw.next()) else {
                     bail!("{flag} needs a value: hidden, only or shown");
                 };
                 let Some(mode) = LayerMode::parse(&value) else {
                     bail!("unknown {flag} value `{value}`: use hidden, only or shown");
                 };
-                if flag == "--comments" {
-                    args.layers.comments = mode;
-                } else {
-                    args.layers.tests = mode;
+                match flag.as_str() {
+                    "--comments" => args.layers.comments = mode,
+                    "--tests" => args.layers.tests = mode,
+                    "--imports" => args.layers.imports = mode,
+                    _ => args.layers.logging = mode,
                 }
             }
             _ if arg.starts_with('-') => bail!("unknown option `{arg}` (see --help)"),
