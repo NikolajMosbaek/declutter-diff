@@ -49,7 +49,7 @@ fn o_opens_the_cursor_line_and_a_removed_line_opens_where_the_code_continues() {
         "src/rate.ts",
         ChangeStatus::Modified,
         Some("const a = 1;\nconst rate = 5;\nconst b = 2;\n"),
-        Some("const a = 1;\nconst b = 2;\n"),
+        Some("const z = 0;\nconst a = 1;\nconst b = 2;\n"),
     );
     let mut app = App::new(vec![file], Layers::default());
     app.root = PathBuf::from("/repo");
@@ -61,14 +61,16 @@ fn o_opens_the_cursor_line_and_a_removed_line_opens_where_the_code_continues() {
         Some((PathBuf::from("/repo/src/rate.ts"), 1))
     );
 
-    // Header, context `const a`, removed `const rate`: the cursor on the removed line.
+    // Header, added `z`, context `a`, then the removed `rate` (old line 2): it opens at
+    // `b`, the next line still in the file (new line 3).
     app.handle_key(key(KeyCode::Right));
-    app.handle_key(key(KeyCode::Down));
-    app.handle_key(key(KeyCode::Down));
+    for _ in 0..3 {
+        app.handle_key(key(KeyCode::Down));
+    }
     app.handle_key(key(KeyCode::Char('o')));
     assert_eq!(
         app.open_request.take(),
-        Some((PathBuf::from("/repo/src/rate.ts"), 2))
+        Some((PathBuf::from("/repo/src/rate.ts"), 3))
     );
 }
 
