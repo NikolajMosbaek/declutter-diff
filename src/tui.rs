@@ -21,7 +21,8 @@ use crate::render::{empty_message, file_title};
 use crate::review::{ChangeStatus, Detection, FileReview, Layers, Summary};
 use crate::store::{Note, NoteSide, NoteStore, ReviewStore};
 
-const HELP: &str = " ↑/↓ move   ←/→ switch pane   n/p file   space page   r reviewed   m note   E export notes   c comments   t tests   i imports   l logging   w formatting   v moves   o open   q quit";
+/// Key help, most-used first: a narrow terminal cuts the end off.
+const HELP: &str = " ↑↓ move  ←→ pane  n/p file  r reviewed  m note  E export  o open │ c comments  t tests  i imports  l logging  w formatting  v moves │ q quit";
 
 /// The pane the arrow keys act on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

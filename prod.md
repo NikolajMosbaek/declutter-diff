@@ -125,12 +125,23 @@ changes, with correct line numbers, and toggling back restores the full diff.
   source file). In Swift, Python and TypeScript projects tests live in their own files, so path
   rules cover the common case.
 
-## Roadmap after v0
+## Built since v0
+
+- `declutter pr <url | number>` for GitHub and Azure DevOps pull requests.
+- Review marks (`r`), remembered per change, so a re-pushed file comes back unreviewed.
+- Word-level highlighting inside edited lines, and syntax colouring.
+- Line notes (`m`) exported as one prompt for a coding agent (`E`, `declutter notes`).
+- Imports (`i`), logging (`l`) and formatting-only (`w`) layers.
+- Moved-code detection across files, collapsible with `v`.
+- Fewer partial Swift parses, and the line of the first error when one remains.
+- Open in editor at the cursor's line (`o`).
+
+## Roadmap
 
 1. In-file test blocks for the tests layer (Rust `#[cfg(test)] mod tests`, `@Test` in sources).
 2. More languages (Go, Rust, Kotlin, Java, C#).
-3. Side-by-side view, file tree with per-file hidden counts, "mark file reviewed".
-4. `git difftool` integration and JSON/patch output.
+3. Side-by-side view.
+4. `git difftool` integration and JSON output.
 5. Per-repo config (`.declutter.toml`): custom test paths, logging APIs, extra layers defined
    as tree-sitter queries.
 6. Browser extension for GitHub and Azure DevOps PRs.
