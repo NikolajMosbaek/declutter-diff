@@ -2,6 +2,7 @@ use std::ops::Range;
 
 use similar::{Algorithm, DiffTag, capture_diff_slices, group_diff_ops};
 
+use crate::highlight::LineClasses;
 use crate::project::Projection;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +22,7 @@ pub struct Row {
     pub text: String,
     /// Byte ranges of `text` that differ from the paired line on the other side.
     pub emphasis: Vec<Range<usize>>,
+    pub syntax: LineClasses,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +53,7 @@ pub fn diff(old: &Projection, new: &Projection, context: usize) -> Vec<Hunk> {
         new_line: None,
         text: old.lines[i].clone(),
         emphasis: Vec::new(),
+        syntax: old.syntax.get(i).cloned().unwrap_or_default(),
     };
     let new_row = |j: usize| Row {
         kind: RowKind::Added,
@@ -58,6 +61,7 @@ pub fn diff(old: &Projection, new: &Projection, context: usize) -> Vec<Hunk> {
         new_line: Some(new.orig[j] + 1),
         text: new.lines[j].clone(),
         emphasis: Vec::new(),
+        syntax: new.syntax.get(j).cloned().unwrap_or_default(),
     };
 
     group_diff_ops(ops, context)

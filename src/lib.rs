@@ -12,6 +12,7 @@
 pub mod classify;
 pub mod diff;
 pub mod git;
+pub mod highlight;
 pub mod lang;
 pub mod pr;
 pub mod project;

@@ -9,6 +9,7 @@ use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::diff::RowKind;
+use crate::highlight::Class;
 use crate::project::LayerMode;
 use crate::render::{empty_message, file_title};
 use crate::review::{Detection, FileReview, Layers, Summary};
@@ -208,22 +209,29 @@ impl App {
             for row in &hunk.rows {
                 let number =
                     |n: Option<usize>| n.map_or("     ".to_string(), |n| format!("{n:>5}"));
-                let (sign, style, emphasis) = match row.kind {
+                let (sign, line, emphasis) = match row.kind {
                     RowKind::Context => (' ', Style::new(), Style::new()),
                     RowKind::Removed => ('-', REMOVED, REMOVED_EMPHASIS),
                     RowKind::Added => ('+', ADDED, ADDED_EMPHASIS),
                 };
+                // Without syntax colours, colour the text itself so the change still stands out.
+                let style = match row.kind {
+                    RowKind::Removed if row.syntax.is_empty() => line.fg(Color::Red),
+                    RowKind::Added if row.syntax.is_empty() => line.fg(Color::Green),
+                    _ => line,
+                };
                 let marks: Vec<(Range<usize>, Style)> = row
-                    .emphasis
+                    .syntax
                     .iter()
-                    .map(|range| (range.clone(), emphasis))
+                    .map(|(range, class)| (range.clone(), syntax_style(*class)))
+                    .chain(row.emphasis.iter().map(|range| (range.clone(), emphasis)))
                     .collect();
                 let mut spans = vec![
                     Span::styled(
                         format!("{} {} ", number(row.old_line), number(row.new_line)),
                         Style::new().add_modifier(Modifier::DIM),
                     ),
-                    Span::styled(format!("{sign} "), style),
+                    Span::styled(format!("{sign} "), style.fg(sign_colour(row.kind)).bold()),
                 ];
                 spans.extend(styled_segments(&row.text, style, &marks));
                 lines.push(Line::from(spans));
@@ -233,15 +241,38 @@ impl App {
     }
 }
 
-const REMOVED: Style = Style::new().fg(Color::Red);
-const ADDED: Style = Style::new().fg(Color::Green);
 // 256-colour backgrounds, so terminals without true colour (Terminal.app) show them too.
+const REMOVED: Style = Style::new().bg(Color::Indexed(52));
+const ADDED: Style = Style::new().bg(Color::Indexed(22));
 const REMOVED_EMPHASIS: Style = Style::new()
-    .bg(Color::Indexed(52))
+    .bg(Color::Indexed(88))
     .add_modifier(Modifier::BOLD);
 const ADDED_EMPHASIS: Style = Style::new()
-    .bg(Color::Indexed(22))
+    .bg(Color::Indexed(28))
     .add_modifier(Modifier::BOLD);
+
+fn sign_colour(kind: RowKind) -> Color {
+    match kind {
+        RowKind::Removed => Color::Red,
+        RowKind::Added => Color::Green,
+        RowKind::Context => Color::Reset,
+    }
+}
+
+/// Named colours, so the viewer follows the terminal's own theme.
+fn syntax_style(class: Class) -> Style {
+    match class {
+        Class::Keyword => Style::new().fg(Color::Magenta),
+        Class::String => Style::new().fg(Color::Yellow),
+        Class::Comment => Style::new()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::ITALIC),
+        Class::Number | Class::Constant => Style::new().fg(Color::Cyan),
+        Class::Type => Style::new().fg(Color::LightCyan),
+        Class::Function => Style::new().fg(Color::LightBlue),
+        Class::Attribute => Style::new().fg(Color::LightMagenta),
+    }
+}
 
 /// Splits `text` into spans, each styled by `base` patched with every layer covering it.
 /// Later layers win where they overlap.

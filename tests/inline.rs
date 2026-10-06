@@ -56,16 +56,47 @@ fn the_viewer_paints_the_changed_tokens_with_a_background() {
     let backgrounds: Vec<(String, Color)> = buffer
         .content()
         .iter()
-        .filter(|cell| cell.bg == Color::Indexed(22) || cell.bg == Color::Indexed(52))
+        .filter(|cell| cell.bg == Color::Indexed(28) || cell.bg == Color::Indexed(88))
         .map(|cell| (cell.symbol().to_string(), cell.bg))
         .collect();
     assert_eq!(
         backgrounds,
         [
-            ("1".to_string(), Color::Indexed(52)),
-            ("0".to_string(), Color::Indexed(52)),
-            ("2".to_string(), Color::Indexed(22)),
-            ("0".to_string(), Color::Indexed(22)),
+            ("1".to_string(), Color::Indexed(88)),
+            ("0".to_string(), Color::Indexed(88)),
+            ("2".to_string(), Color::Indexed(28)),
+            ("0".to_string(), Color::Indexed(28)),
         ]
     );
+}
+
+#[test]
+fn the_viewer_colours_code_by_syntax() {
+    let file = FileReview::new(FileChange {
+        path: "limits.ts".to_string(),
+        old_path: None,
+        status: ChangeStatus::Modified,
+        old: Some("let a = 1;\n".to_string()),
+        new: Some("const a = 1;\n".to_string()),
+        binary: false,
+    });
+    let mut app = App::new(vec![file], Layers::default());
+    let mut terminal = Terminal::new(TestBackend::new(100, 12)).expect("terminal");
+    terminal.draw(|frame| draw(frame, &mut app)).expect("draw");
+
+    let buffer = terminal.backend().buffer();
+    let row = buffer
+        .content()
+        .chunks(buffer.area.width as usize)
+        .find(|row| {
+            row.iter()
+                .map(|c| c.symbol())
+                .collect::<String>()
+                .contains("+ const")
+        })
+        .expect("added row is drawn");
+    let text: String = row.iter().map(|c| c.symbol()).collect();
+    let at = text.find("const").expect("keyword drawn");
+    let column = text[..at].chars().count();
+    assert_eq!(row[column].fg, Color::Magenta);
 }

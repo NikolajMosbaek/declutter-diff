@@ -1,5 +1,7 @@
 use std::ops::Range;
 
+use crate::highlight::LineClasses;
+
 /// What the reviewer sees of a layer: all of it, none of it, or only it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayerMode {
@@ -49,6 +51,8 @@ pub struct Projection {
     pub lines: Vec<String>,
     /// Zero-based original line index of each entry in `lines`.
     pub orig: Vec<usize>,
+    /// Syntax classes per line; empty until `highlight::annotate` runs.
+    pub syntax: Vec<LineClasses>,
 }
 
 pub fn project(src: &str, comments: &[Range<usize>], mode: LayerMode) -> Projection {

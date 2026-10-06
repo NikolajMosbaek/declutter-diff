@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use crate::classify::classify;
 use crate::diff::{Hunk, RowKind, diff};
+use crate::highlight::annotate;
 use crate::lang::Lang;
 use crate::project::{LayerMode, project};
 use crate::store::fingerprint;
@@ -106,12 +107,18 @@ impl FileReview {
             }
         };
 
+        let lang = match detection {
+            Detection::Parsed(lang) | Detection::Partial(lang) => Some(lang),
+            _ => None,
+        };
         let hunks_for = |mode: LayerMode| {
-            let mut hunks = diff(
-                &project(old, &old_comments, mode),
-                &project(new, &new_comments, mode),
-                CONTEXT,
-            );
+            let mut old_view = project(old, &old_comments, mode);
+            let mut new_view = project(new, &new_comments, mode);
+            if let Some(lang) = lang {
+                annotate(&mut old_view, lang);
+                annotate(&mut new_view, lang);
+            }
+            let mut hunks = diff(&old_view, &new_view, CONTEXT);
             if mode == LayerMode::Hidden {
                 // Added or removed blank lines are layout: they mostly travel with a
                 // comment, and they never change what the code does.
