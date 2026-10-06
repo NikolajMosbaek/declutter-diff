@@ -18,7 +18,7 @@ use crate::render::{empty_message, file_title};
 use crate::review::{Detection, FileReview, Layers, Summary};
 use crate::store::{Note, NoteSide, NoteStore, ReviewStore};
 
-const HELP: &str = " ↑/↓ move   ←/→ switch pane   n/p file   space page   r reviewed   m note   E export notes   c comments   t tests   i imports   l logging   q quit";
+const HELP: &str = " ↑/↓ move   ←/→ switch pane   n/p file   space page   r reviewed   m note   E export notes   c comments   t tests   i imports   l logging   w formatting   q quit";
 
 /// The pane the arrow keys act on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,6 +154,10 @@ impl App {
             }
             KeyCode::Char('l') => {
                 self.layers.logging = self.layers.logging.next();
+                self.reset_diff_position();
+            }
+            KeyCode::Char('w') => {
+                self.layers.formatting = self.layers.formatting.next();
                 self.reset_diff_position();
             }
             KeyCode::Right | KeyCode::Enter => self.focus = Focus::Diff,

@@ -4,7 +4,7 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use crate::classify::{Classified, classify};
-use crate::diff::{Hunk, RowKind, diff};
+use crate::diff::{Hunk, RowKind, diff, filter_formatting};
 use crate::highlight::annotate;
 use crate::lang::Lang;
 use crate::project::{LayerMode, project};
@@ -95,19 +95,22 @@ impl SpanLayer {
     }
 }
 
-/// The modes of the span layers: the part of `Layers` that changes a file's diff.
+/// The part of `Layers` that changes a file's diff: the span layers, and whether
+/// formatting-only changes are shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SpanModes {
+pub struct DiffModes {
     pub comments: LayerMode,
     pub imports: LayerMode,
     pub logging: LayerMode,
+    pub formatting: LayerMode,
 }
 
-impl SpanModes {
-    pub const SHOWN: SpanModes = SpanModes {
+impl DiffModes {
+    pub const SHOWN: DiffModes = DiffModes {
         comments: LayerMode::Shown,
         imports: LayerMode::Shown,
         logging: LayerMode::Shown,
+        formatting: LayerMode::Shown,
     };
 
     pub fn mode(self, layer: SpanLayer) -> LayerMode {
@@ -133,33 +136,47 @@ impl SpanModes {
         (LayerMode::Shown, Vec::new())
     }
 
-    /// "comment", "comment/import": the layers the projection acts on.
+    /// What the reviewer sees, for messages: only some layers, some hidden, or all
+    /// shown, with the adjective naming those layers ("comment", "comment/formatting").
+    pub fn outcome(self) -> (LayerMode, String) {
+        for mode in [LayerMode::Only, LayerMode::Hidden] {
+            let mut names: Vec<&str> = SpanLayer::ALL
+                .into_iter()
+                .filter(|&layer| self.mode(layer) == mode)
+                .map(SpanLayer::adjective)
+                .collect();
+            if self.formatting == mode {
+                names.push("formatting");
+            }
+            if !names.is_empty() {
+                return (mode, names.join("/"));
+            }
+        }
+        (LayerMode::Shown, String::new())
+    }
+
     pub fn adjective(self) -> String {
-        let (_, layers) = self.effective();
-        layers
-            .iter()
-            .map(|layer| layer.adjective())
-            .collect::<Vec<_>>()
-            .join("/")
+        self.outcome().1
     }
 }
 
 /// Just the comment layer set; the rest shown.
-impl From<LayerMode> for SpanModes {
-    fn from(comments: LayerMode) -> SpanModes {
-        SpanModes {
+impl From<LayerMode> for DiffModes {
+    fn from(comments: LayerMode) -> DiffModes {
+        DiffModes {
             comments,
-            ..SpanModes::SHOWN
+            ..DiffModes::SHOWN
         }
     }
 }
 
-impl From<Layers> for SpanModes {
-    fn from(layers: Layers) -> SpanModes {
-        SpanModes {
+impl From<Layers> for DiffModes {
+    fn from(layers: Layers) -> DiffModes {
+        DiffModes {
             comments: layers.comments,
             imports: layers.imports,
             logging: layers.logging,
+            formatting: layers.formatting,
         }
     }
 }
@@ -186,7 +203,7 @@ pub struct FileReview {
     new: String,
     old_layers: Classified,
     new_layers: Classified,
-    views: RefCell<HashMap<SpanModes, Rc<ModeView>>>,
+    views: RefCell<HashMap<DiffModes, Rc<ModeView>>>,
 }
 
 impl FileReview {
@@ -237,16 +254,16 @@ impl FileReview {
         }
     }
 
-    pub fn view(&self, modes: impl Into<SpanModes>) -> Rc<ModeView> {
+    pub fn view(&self, modes: impl Into<DiffModes>) -> Rc<ModeView> {
         let modes = modes.into();
         if let Some(view) = self.views.borrow().get(&modes) {
             return Rc::clone(view);
         }
         let hunks = self.hunks_for(modes);
-        let hidden_hunks = if modes == SpanModes::SHOWN {
+        let hidden_hunks = if modes == DiffModes::SHOWN {
             0
         } else {
-            count_hidden(&self.view(SpanModes::SHOWN).hunks, &hunks)
+            count_hidden(&self.view(DiffModes::SHOWN).hunks, &hunks)
         };
         let view = Rc::new(ModeView {
             hunks,
@@ -256,7 +273,7 @@ impl FileReview {
         view
     }
 
-    fn hunks_for(&self, modes: SpanModes) -> Vec<Hunk> {
+    fn hunks_for(&self, modes: DiffModes) -> Vec<Hunk> {
         let (mode, layers) = modes.effective();
         let lang = match self.detection {
             Detection::Parsed(lang) | Detection::Partial(lang) => Some(lang),
@@ -274,6 +291,12 @@ impl FileReview {
             &side(&self.new, &self.new_layers),
             CONTEXT,
         );
+        // Indentation is syntax in Python, and in files without a grammar it may be too.
+        let indentation_matters = !matches!(
+            lang,
+            Some(Lang::Swift | Lang::TypeScript | Lang::Tsx | Lang::JavaScript)
+        );
+        filter_formatting(&mut hunks, modes.formatting, indentation_matters);
         if mode == LayerMode::Hidden {
             // Added or removed blank lines are layout: they mostly travel with whatever
             // was hidden, and they never change what the code does.
@@ -287,7 +310,7 @@ impl FileReview {
     }
 
     pub fn total_hunks(&self) -> usize {
-        self.view(SpanModes::SHOWN).hunks.len()
+        self.view(DiffModes::SHOWN).hunks.len()
     }
 
     /// Whether the file is listed at all under this test-layer mode.
@@ -355,6 +378,7 @@ pub struct Layers {
     pub tests: LayerMode,
     pub imports: LayerMode,
     pub logging: LayerMode,
+    pub formatting: LayerMode,
 }
 
 impl Default for Layers {
@@ -364,6 +388,7 @@ impl Default for Layers {
             tests: LayerMode::Shown,
             imports: LayerMode::Shown,
             logging: LayerMode::Shown,
+            formatting: LayerMode::Shown,
         }
     }
 }
@@ -414,6 +439,7 @@ impl Summary {
             ("tests", layers.tests),
             ("imports", layers.imports),
             ("logging", layers.logging),
+            ("formatting", layers.formatting),
         ]
         .into_iter()
         .filter(|(_, mode)| *mode != LayerMode::Shown)
@@ -425,9 +451,9 @@ impl Summary {
             states
         };
 
-        let modes = SpanModes::from(layers);
+        let modes = DiffModes::from(layers);
         let adjective = modes.adjective();
-        match modes.effective().0 {
+        match modes.outcome().0 {
             LayerMode::Shown => parts.push(format!(
                 "{} {} in {} {}",
                 self.total_hunks,

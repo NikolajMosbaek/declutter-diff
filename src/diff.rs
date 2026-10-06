@@ -3,7 +3,7 @@ use std::ops::Range;
 use similar::{Algorithm, DiffTag, capture_diff_slices, group_diff_ops};
 
 use crate::highlight::LineClasses;
-use crate::project::Projection;
+use crate::project::{LayerMode, Projection};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowKind {
@@ -142,7 +142,7 @@ pub fn inline_changes(old: &str, new: &str) -> Option<(Marks, Marks)> {
 }
 
 /// Splits a line into identifier/number runs, whitespace runs and single punctuation.
-fn tokens(line: &str) -> Vec<Range<usize>> {
+pub(crate) fn tokens(line: &str) -> Vec<Range<usize>> {
     let class = |c: char| {
         if c.is_alphanumeric() || c == '_' {
             0
@@ -177,4 +177,101 @@ fn push_merged(marks: &mut Vec<Range<usize>>, span: Range<usize>) {
         Some(last) if last.end >= span.start => last.end = last.end.max(span.end),
         _ => marks.push(span),
     }
+}
+
+/// Applies the formatting layer to hunks: finds changes that only move whitespace —
+/// re-indenting, re-spacing, re-wrapping a statement over more or fewer lines — and
+/// either turns them into context (hidden) or keeps nothing else (only).
+pub fn filter_formatting(hunks: &mut Vec<Hunk>, mode: LayerMode, indentation_matters: bool) {
+    if mode == LayerMode::Shown {
+        return;
+    }
+    for hunk in hunks.iter_mut() {
+        let formatting = formatting_rows(&hunk.rows, indentation_matters);
+        let rows = std::mem::take(&mut hunk.rows);
+        hunk.rows = rows
+            .into_iter()
+            .zip(formatting)
+            .filter_map(
+                |(row, is_formatting)| match (mode, row.kind, is_formatting) {
+                    (_, RowKind::Context, _) => Some(row),
+                    // The new layout stays visible as context, so the code is not missing.
+                    (LayerMode::Hidden, RowKind::Added, true) => Some(Row {
+                        kind: RowKind::Context,
+                        old_line: None,
+                        emphasis: Vec::new(),
+                        ..row
+                    }),
+                    (LayerMode::Hidden, _, true) => None,
+                    (LayerMode::Only, _, false) => None,
+                    _ => Some(row),
+                },
+            )
+            .collect();
+    }
+    hunks.retain(|hunk| hunk.changed().next().is_some());
+}
+
+/// For each row, whether it belongs to a formatting-only change. A run of changed rows
+/// counts as a whole when its removed and added lines hold the same tokens; otherwise
+/// lines replaced one-for-one are compared pairwise.
+fn formatting_rows(rows: &[Row], indentation_matters: bool) -> Vec<bool> {
+    let mut marks = vec![false; rows.len()];
+    let mut start = 0;
+    while start < rows.len() {
+        if rows[start].kind == RowKind::Context {
+            start += 1;
+            continue;
+        }
+        let end = (start..rows.len())
+            .find(|&i| rows[i].kind == RowKind::Context)
+            .unwrap_or(rows.len());
+        let removed: Vec<usize> = (start..end)
+            .filter(|&i| rows[i].kind == RowKind::Removed)
+            .collect();
+        let added: Vec<usize> = (start..end)
+            .filter(|&i| rows[i].kind == RowKind::Added)
+            .collect();
+        let stream = |indices: &[usize]| -> Vec<String> {
+            indices
+                .iter()
+                .flat_map(|&i| significant_tokens(&rows[i].text, indentation_matters))
+                .collect()
+        };
+        if !(removed.is_empty() && added.is_empty()) {
+            // Equal streams include added or removed blank lines: layout only.
+            if stream(&removed) == stream(&added) {
+                marks[start..end].iter_mut().for_each(|mark| *mark = true);
+            } else if removed.len() == added.len() {
+                for (&old, &new) in removed.iter().zip(&added) {
+                    if stream(&[old]) == stream(&[new]) {
+                        marks[old] = true;
+                        marks[new] = true;
+                    }
+                }
+            }
+        }
+        start = end;
+    }
+    marks
+}
+
+/// The tokens of a line that whitespace changes cannot affect, plus its indentation
+/// when indentation is part of the syntax.
+fn significant_tokens(line: &str, indentation_matters: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    if indentation_matters && !line.trim().is_empty() {
+        out.push(format!(
+            "indent:{}",
+            &line[..line.len() - line.trim_start().len()]
+        ));
+    }
+    out.extend(
+        tokens(line)
+            .into_iter()
+            .map(|range| &line[range])
+            .filter(|token| !token.trim().is_empty())
+            .map(str::to_string),
+    );
+    out
 }

@@ -5,7 +5,7 @@ See [prod.md](prod.md) for the idea, the design and the roadmap.
 
 ## Status
 
-Prototype: four layers, each shown, hidden or shown on its own.
+Prototype: five layers, each shown, hidden or shown on its own.
 
 - **Comments** (and Python docstrings) in Swift, TypeScript/TSX, JavaScript and Python.
 - **Tests**, per file: test directories and file-name conventions in any language
@@ -14,6 +14,9 @@ Prototype: four layers, each shown, hidden or shown on its own.
 - **Imports**: `import` statements (and `export … from` re-exports).
 - **Logging**: statements that only log — `print(…)`, `NSLog`, `os_log`, `console.*(…)`, and
   `debug/info/warn/error/…` calls on a `logger`, `log`, `logging` or `console` receiver.
+- **Formatting**: changes that only move whitespace — re-indenting, re-spacing, re-wrapping
+  a statement over more or fewer lines, added blank lines. When hidden, the new layout stays
+  visible as context. Indentation counts as code in Python and in files without a grammar.
 
 ## Build
 
@@ -55,6 +58,7 @@ Viewer keys:
 | `c` | cycle comments: hidden → only → shown |
 | `t` | cycle tests: shown → hidden → only |
 | `i` / `l` | cycle imports / logging: shown → hidden → only |
+| `w` | cycle formatting-only changes: shown → hidden → only |
 | `q` | quit (`Esc` leaves the diff first) |
 
 Layers combine: everything set to *hidden* is cut out together. A layer set to *only*

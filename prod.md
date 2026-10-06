@@ -28,6 +28,7 @@ Treat a diff as layers that can be switched on and off:
 | `t` | Tests | Test files (by path convention or test-framework import); later, test blocks inside source files |
 | `i` | Imports | `import` / `use` / `#include` statements |
 | `l` | Logging | Statements that only call a logging API (`print`, `console.*`, `logger.*`, …) |
+| `w` | Formatting | Changes that only move whitespace: re-indent, re-space, re-wrap |
 
 Toggle comments off and the diff shows only code changes: comment-only hunks disappear,
 and a line that changed code *and* a trailing comment shows only the code change. A status

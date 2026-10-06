@@ -2,7 +2,7 @@ use declutter::classify::classify;
 use declutter::diff::{Hunk, RowKind};
 use declutter::lang::Lang;
 use declutter::project::LayerMode;
-use declutter::review::{ChangeStatus, FileChange, FileReview, Layers, SpanModes, Summary};
+use declutter::review::{ChangeStatus, DiffModes, FileChange, FileReview, Layers, Summary};
 
 fn review(path: &str, old: &str, new: &str) -> FileReview {
     FileReview::new(FileChange {
@@ -15,7 +15,7 @@ fn review(path: &str, old: &str, new: &str) -> FileReview {
     })
 }
 
-fn changes(file: &FileReview, modes: SpanModes) -> Vec<String> {
+fn changes(file: &FileReview, modes: DiffModes) -> Vec<String> {
     file.view(modes)
         .hunks
         .iter()
@@ -35,11 +35,11 @@ fn texts<'a>(src: &'a str, spans: &[std::ops::Range<usize>]) -> Vec<&'a str> {
     spans.iter().map(|span| &src[span.clone()]).collect()
 }
 
-fn modes(imports: LayerMode, logging: LayerMode) -> SpanModes {
-    SpanModes {
+fn modes(imports: LayerMode, logging: LayerMode) -> DiffModes {
+    DiffModes {
         imports,
         logging,
-        ..SpanModes::SHOWN
+        ..DiffModes::SHOWN
     }
 }
 
@@ -119,7 +119,7 @@ fn hidden_layers_combine() {
         "import os\nimport sys\n# why\nprint(x)\nx = 1\n",
     );
 
-    let all = SpanModes {
+    let all = DiffModes {
         comments: LayerMode::Hidden,
         ..modes(LayerMode::Hidden, LayerMode::Hidden)
     };
@@ -150,7 +150,7 @@ fn a_layer_set_to_only_wins_over_hidden_ones() {
         "# Percent.\nrate = 5\n",
         "# Fraction.\nprint(rate)\nrate = 0.05\n",
     );
-    let comments_only = SpanModes {
+    let comments_only = DiffModes {
         comments: LayerMode::Only,
         ..modes(LayerMode::Shown, LayerMode::Hidden)
     };

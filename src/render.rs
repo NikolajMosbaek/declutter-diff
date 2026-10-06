@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 use crate::diff::RowKind;
 use crate::project::LayerMode;
-use crate::review::{Detection, FileReview, Layers, SpanModes, Summary};
+use crate::review::{Detection, DiffModes, FileReview, Layers, Summary};
 
 /// The decluttered diff as plain text. Line numbers in hunk headers refer to the
 /// original files, so the output is for reading, not for `git apply`.
@@ -41,10 +41,10 @@ pub fn file_title(file: &FileReview) -> String {
 }
 
 /// Why a file with changes shows nothing under these layers.
-pub fn empty_message(file: &FileReview, modes: SpanModes) -> String {
+pub fn empty_message(file: &FileReview, modes: DiffModes) -> String {
     let hidden = file.view(modes).hidden_hunks;
     let adjective = modes.adjective();
-    match modes.effective().0 {
+    match modes.outcome().0 {
         _ if file.total_hunks() == 0 => "no textual changes".to_string(),
         LayerMode::Hidden => format!(
             "{adjective}-only changes: {hidden} hunk{} hidden",
