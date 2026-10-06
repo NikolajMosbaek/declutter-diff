@@ -23,10 +23,12 @@ OPTIONS:
     -V, --version        Show the version
 
 KEYS (viewer):
-    c        cycle comments: hidden → only → shown
-    n / p    next / previous file
-    j / k    scroll; d / u half a page; g / G top / bottom
-    q        quit
+    ↑ / ↓     move through the files, or scroll the diff when it has focus
+    → / ←     focus the diff / the file list (also Tab, Enter)
+    n / p     next / previous file from either pane
+    space     page down; u up; g / G top / bottom
+    c         cycle comments: hidden → only → shown
+    q         quit
 ";
 
 struct Args {

@@ -32,12 +32,13 @@ Viewer keys:
 
 | Key | Action |
 |-----|--------|
+| `↑` / `↓` (or `k` / `j`) | move through the files, or scroll the diff when it has focus |
+| `→` / `Enter`, `←` (or `Tab`) | focus the diff, back to the files |
+| `n` / `p` | next / previous file from either pane |
+| `Space` / `PgDn`, `u` / `PgUp` | page the diff |
+| `g` / `G` | top / bottom of the diff |
 | `c` | cycle comments: hidden → only → shown |
-| `n` / `p` | next / previous file |
-| `j` / `k` | scroll |
-| `d` / `u` | half page down / up |
-| `g` / `G` | top / bottom |
-| `q` | quit |
+| `q` | quit (`Esc` leaves the diff first) |
 
 The status line always says what is hidden, e.g.
 `comments: hidden · showing 7 of 12 hunks · 5 comment-only hunks hidden · 2 comment-only files`.

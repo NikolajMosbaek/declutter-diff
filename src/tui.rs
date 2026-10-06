@@ -11,13 +11,21 @@ use crate::project::CommentMode;
 use crate::render::{empty_message, file_title};
 use crate::review::{Detection, FileReview, Summary};
 
-const HELP: &str = " c comments (hidden → only → shown)   n/p file   j/k scroll   d/u page   g/G top/bottom   q quit";
+const HELP: &str = " ↑/↓ move   ←/→ or Tab switch pane   n/p next/prev file   space/PgDn page   g/G top/bottom   c comments   q quit";
+
+/// The pane the arrow keys act on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    Files,
+    Diff,
+}
 
 pub struct App {
     pub files: Vec<FileReview>,
     pub mode: CommentMode,
     pub selected: usize,
     pub scroll: usize,
+    pub focus: Focus,
     pub quit: bool,
     /// Height of the diff pane at the last draw, for paging and clamping.
     diff_height: usize,
@@ -30,6 +38,7 @@ impl App {
             mode,
             selected: 0,
             scroll: 0,
+            focus: Focus::Files,
             quit: false,
             diff_height: 20,
         }
@@ -38,20 +47,32 @@ impl App {
     pub fn handle_key(&mut self, key: KeyEvent) {
         let page = (self.diff_height / 2).max(1);
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
+            KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
+            KeyCode::Esc if self.focus == Focus::Diff => self.focus = Focus::Files,
+            KeyCode::Esc => self.quit = true,
             KeyCode::Char('c') => {
                 self.mode = self.mode.next();
                 self.scroll = 0;
             }
-            KeyCode::Char('n') | KeyCode::Char('J') | KeyCode::Tab | KeyCode::Right => {
-                self.select(self.selected.saturating_add(1))
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter => self.focus = Focus::Diff,
+            KeyCode::Left | KeyCode::Char('h') => self.focus = Focus::Files,
+            KeyCode::Tab | KeyCode::BackTab => {
+                self.focus = match self.focus {
+                    Focus::Files => Focus::Diff,
+                    Focus::Diff => Focus::Files,
+                }
             }
-            KeyCode::Char('p') | KeyCode::Char('K') | KeyCode::BackTab | KeyCode::Left => {
-                self.select(self.selected.saturating_sub(1))
-            }
-            KeyCode::Char('j') | KeyCode::Down => self.scroll_to(self.scroll.saturating_add(1)),
-            KeyCode::Char('k') | KeyCode::Up => self.scroll_to(self.scroll.saturating_sub(1)),
+            KeyCode::Down | KeyCode::Char('j') => match self.focus {
+                Focus::Files => self.select(self.selected.saturating_add(1)),
+                Focus::Diff => self.scroll_to(self.scroll.saturating_add(1)),
+            },
+            KeyCode::Up | KeyCode::Char('k') => match self.focus {
+                Focus::Files => self.select(self.selected.saturating_sub(1)),
+                Focus::Diff => self.scroll_to(self.scroll.saturating_sub(1)),
+            },
+            KeyCode::Char('n') | KeyCode::Char('J') => self.select(self.selected.saturating_add(1)),
+            KeyCode::Char('p') | KeyCode::Char('K') => self.select(self.selected.saturating_sub(1)),
             KeyCode::Char('d') | KeyCode::Char(' ') | KeyCode::PageDown => {
                 self.scroll_to(self.scroll.saturating_add(page))
             }
@@ -144,7 +165,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let mut list_state = ListState::default().with_selected(Some(app.selected));
     frame.render_stateful_widget(
         List::new(items)
-            .block(Block::bordered().title(" Files "))
+            .block(pane(" Files ".to_string(), app.focus == Focus::Files))
             .highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
         files_area,
         &mut list_state,
@@ -160,7 +181,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         .unwrap_or_default();
     frame.render_widget(
         Paragraph::new(lines)
-            .block(Block::bordered().title(title))
+            .block(pane(title, app.focus == Focus::Diff))
             .scroll((app.scroll.min(u16::MAX as usize) as u16, 0)),
         diff_area,
     );
@@ -171,6 +192,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         status,
     );
     frame.render_widget(Paragraph::new(HELP).dim(), help);
+}
+
+/// A bordered pane; the focused one is drawn in colour so it is clear where the arrows go.
+fn pane(title: String, focused: bool) -> Block<'static> {
+    let block = Block::bordered().title(title);
+    if focused {
+        block
+            .border_style(Style::new().fg(Color::Cyan))
+            .title_style(Style::new().bold())
+    } else {
+        block.border_style(Style::new().add_modifier(Modifier::DIM))
+    }
 }
 
 pub fn run(files: Vec<FileReview>, mode: CommentMode) -> Result<()> {

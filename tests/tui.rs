@@ -59,3 +59,43 @@ fn pressing_c_cycles_through_the_comment_modes() {
         "{shown}"
     );
 }
+
+fn change(path: &str, old: &str, new: &str) -> FileReview {
+    FileReview::new(FileChange {
+        path: path.to_string(),
+        old_path: None,
+        status: ChangeStatus::Modified,
+        old: Some(old.to_string()),
+        new: Some(new.to_string()),
+        binary: false,
+    })
+}
+
+#[test]
+fn arrow_keys_move_through_the_file_list_until_the_diff_has_focus() {
+    let long_old: String = (0..60).map(|i| format!("let v{i} = {i}\n")).collect();
+    let long_new = long_old
+        .replace("= 0\n", "= 100\n")
+        .replace("= 59\n", "= 159\n");
+    let mut app = App::new(
+        vec![
+            change("A.swift", "let a = 1\n", "let a = 2\n"),
+            change("B.swift", &long_old, &long_new),
+        ],
+        CommentMode::Hidden,
+    );
+    screen(&mut app);
+
+    app.handle_key(KeyEvent::from(KeyCode::Down));
+    assert_eq!(app.selected, 1);
+    assert!(screen(&mut app).contains(" B.swift [Swift] "));
+
+    app.handle_key(KeyEvent::from(KeyCode::Right));
+    app.handle_key(KeyEvent::from(KeyCode::Down));
+    assert_eq!(app.selected, 1);
+    assert_eq!(app.scroll, 1);
+
+    app.handle_key(KeyEvent::from(KeyCode::Left));
+    app.handle_key(KeyEvent::from(KeyCode::Up));
+    assert_eq!(app.selected, 0);
+}
