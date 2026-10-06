@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
@@ -206,22 +208,66 @@ impl App {
             for row in &hunk.rows {
                 let number =
                     |n: Option<usize>| n.map_or("     ".to_string(), |n| format!("{n:>5}"));
-                let (sign, style) = match row.kind {
-                    RowKind::Context => (' ', Style::new()),
-                    RowKind::Removed => ('-', Style::new().fg(Color::Red)),
-                    RowKind::Added => ('+', Style::new().fg(Color::Green)),
+                let (sign, style, emphasis) = match row.kind {
+                    RowKind::Context => (' ', Style::new(), Style::new()),
+                    RowKind::Removed => ('-', REMOVED, REMOVED_EMPHASIS),
+                    RowKind::Added => ('+', ADDED, ADDED_EMPHASIS),
                 };
-                lines.push(Line::from(vec![
+                let marks: Vec<(Range<usize>, Style)> = row
+                    .emphasis
+                    .iter()
+                    .map(|range| (range.clone(), emphasis))
+                    .collect();
+                let mut spans = vec![
                     Span::styled(
                         format!("{} {} ", number(row.old_line), number(row.new_line)),
                         Style::new().add_modifier(Modifier::DIM),
                     ),
-                    Span::styled(format!("{sign} {}", row.text.replace('\t', "    ")), style),
-                ]));
+                    Span::styled(format!("{sign} "), style),
+                ];
+                spans.extend(styled_segments(&row.text, style, &marks));
+                lines.push(Line::from(spans));
             }
         }
         lines
     }
+}
+
+const REMOVED: Style = Style::new().fg(Color::Red);
+const ADDED: Style = Style::new().fg(Color::Green);
+// 256-colour backgrounds, so terminals without true colour (Terminal.app) show them too.
+const REMOVED_EMPHASIS: Style = Style::new()
+    .bg(Color::Indexed(52))
+    .add_modifier(Modifier::BOLD);
+const ADDED_EMPHASIS: Style = Style::new()
+    .bg(Color::Indexed(22))
+    .add_modifier(Modifier::BOLD);
+
+/// Splits `text` into spans, each styled by `base` patched with every layer covering it.
+/// Later layers win where they overlap.
+fn styled_segments(
+    text: &str,
+    base: Style,
+    layers: &[(Range<usize>, Style)],
+) -> Vec<Span<'static>> {
+    let mut cuts: Vec<usize> = layers
+        .iter()
+        .flat_map(|(range, _)| [range.start, range.end])
+        .filter(|&cut| cut < text.len() && text.is_char_boundary(cut))
+        .chain([0, text.len()])
+        .collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    cuts.windows(2)
+        .map(|pair| {
+            let (start, end) = (pair[0], pair[1]);
+            let style = layers
+                .iter()
+                .filter(|(range, _)| range.start <= start && end <= range.end)
+                .fold(base, |style, (_, layer)| style.patch(*layer));
+            Span::styled(text[start..end].replace('\t', "    "), style)
+        })
+        .collect()
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
