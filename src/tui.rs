@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::ops::Range;
@@ -6,10 +7,10 @@ use std::process::{Command, Stdio};
 
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::diff::{Row, RowKind};
@@ -21,8 +22,60 @@ use crate::render::{empty_message, file_title};
 use crate::review::{ChangeStatus, Detection, FileReview, Layers, Summary};
 use crate::store::{Note, NoteSide, NoteStore, ReviewStore};
 
-/// Key help, most-used first: a narrow terminal cuts the end off.
-const HELP: &str = " ↑↓ move  ←→ pane  n/p file  r reviewed  m note  E export  o open │ c comments  t tests  i imports  l logging  w formatting  v moves │ q quit";
+/// Key help, most-used first: a narrow terminal cuts the end off. `?` shows them all.
+const HELP: &str = " ↑↓ move  ←→ pane  ]/[ change  }/{ file  / search  r reviewed  m note  c t i l f layers  ? help  q quit";
+
+/// A titled group of (keys, action) pairs on the `?` screen.
+type KeyGroup = (&'static str, &'static [(&'static str, &'static str)]);
+
+/// Every key, for the `?` screen, as two columns of groups.
+const KEYS: [&[KeyGroup]; 2] = [
+    &[
+        (
+            "Move",
+            &[
+                ("↑ ↓  j k", "move: files, or the diff cursor"),
+                ("← →  Tab ⏎", "switch pane"),
+                ("] [", "next / previous change (on across files)"),
+                ("} {", "next / previous file"),
+                ("Space  b", "page down / up"),
+                ("d  u", "half a page down / up"),
+                ("g  G", "top / bottom (in files: first / last)"),
+                ("/  n  N", "search; next / previous match"),
+            ],
+        ),
+        (
+            "Other",
+            &[
+                ("Esc", "back: leave the diff, cancel, clear search"),
+                ("?", "this help"),
+                ("q", "quit"),
+            ],
+        ),
+    ],
+    &[
+        (
+            "Review",
+            &[
+                ("r", "mark reviewed, go to the next file"),
+                ("m", "note the line under the cursor"),
+                ("E", "copy all notes as one prompt"),
+                ("o", "open in $EDITOR at the line"),
+            ],
+        ),
+        (
+            "Layers: key hides / shows, Shift = only",
+            &[
+                ("c  C", "comments"),
+                ("t  T", "tests"),
+                ("i  I", "imports"),
+                ("l  L", "logging"),
+                ("f  F", "formatting-only changes"),
+                ("M", "collapse moved blocks"),
+            ],
+        ),
+    ],
+];
 
 /// The pane the arrow keys act on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,12 +84,49 @@ pub enum Focus {
     Diff,
 }
 
+/// A one-line prompt in the status bar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Input {
+    Note(String),
+    Search(String),
+}
+
+/// The layers, as keys for remembering what a layer was before *only*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Layer {
+    Comments,
+    Tests,
+    Imports,
+    Logging,
+    Formatting,
+}
+
 /// The line of a file a diff line stands for, so notes can be attached to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Anchor {
     side: NoteSide,
     line: usize,
     code: String,
+}
+
+/// The diff pane's content for one file.
+struct DiffView {
+    lines: Vec<Line<'static>>,
+    /// For each line, the file line it stands for.
+    anchors: Vec<Option<Anchor>>,
+    /// For each line that shows code, that code, for search.
+    texts: Vec<Option<String>>,
+    /// The first changed line of each hunk.
+    changes: Vec<usize>,
+}
+
+/// Where the cursor is in file terms, so it can be found again after the view changes.
+#[derive(Debug, Clone, Copy)]
+struct Place {
+    side: NoteSide,
+    line: usize,
+    /// The cursor's row on screen, kept so the view does not jump.
+    row: usize,
 }
 
 /// Copies text to the system clipboard; returns whether it worked.
@@ -55,8 +145,11 @@ pub struct App {
     pub focus: Focus,
     pub store: ReviewStore,
     pub notes: NoteStore,
-    /// The note being typed, while the note editor is open.
-    pub input: Option<String>,
+    /// The prompt being typed, if one is open.
+    pub input: Option<Input>,
+    /// The last search, highlighted in the diff until cleared with Esc.
+    pub search: Option<String>,
+    pub show_help: bool,
     /// A one-off message for the status bar, cleared by the next key.
     pub message: Option<String>,
     pub clipboard: Clipboard,
@@ -64,6 +157,8 @@ pub struct App {
     moves: Moves,
     /// Show each moved block as its one-line marker only.
     pub collapse_moves: bool,
+    /// What each layer was before it was switched to *only*, to switch back to.
+    before_only: HashMap<Layer, LayerMode>,
     /// The working tree's top-level directory; changed paths are relative to it.
     pub root: PathBuf,
     /// A file and line to open in the editor, for the run loop to carry out.
@@ -100,10 +195,13 @@ impl App {
             store,
             notes,
             input: None,
+            search: None,
+            show_help: false,
             message: None,
             clipboard: system_clipboard,
             moves: Moves::new(),
             collapse_moves: false,
+            before_only: HashMap::new(),
             root: PathBuf::from("."),
             open_request: None,
             quit: false,
@@ -111,6 +209,7 @@ impl App {
         };
         app.refilter();
         app.refresh_moves();
+        app.go_to_first_change();
         app
     }
 
@@ -121,7 +220,7 @@ impl App {
             .map(|&index| &self.files[index])
     }
 
-    /// Rebuilds the visible list after the test layer changed, keeping the cursor on
+    /// Rebuilds the visible list after the test layer changed, keeping the selection on
     /// the same file when it is still listed.
     fn refilter(&mut self) {
         let current = self.visible.get(self.selected).copied();
@@ -132,25 +231,21 @@ impl App {
             Some(position) => self.selected = position,
             None => {
                 self.selected = self.selected.min(self.visible.len().saturating_sub(1));
-                self.reset_diff_position();
+                self.go_to_first_change();
             }
         }
     }
 
-    fn reset_diff_position(&mut self) {
-        self.cursor = 0;
-        self.scroll = 0;
+    /// Puts the cursor on the current file's first change.
+    fn go_to_first_change(&mut self) {
+        self.cursor = self.diff_view().changes.first().copied().unwrap_or(0);
+        self.scroll = self.cursor.saturating_sub(1);
     }
 
     /// Re-finds moved blocks: what counts as moved depends on the layers and the files listed.
     fn refresh_moves(&mut self) {
         let listed: Vec<&FileReview> = self.visible.iter().map(|&i| &self.files[i]).collect();
         self.moves = detect(&listed, self.layers.into());
-    }
-
-    fn layers_changed(&mut self) {
-        self.reset_diff_position();
-        self.refresh_moves();
     }
 
     /// Number of moved blocks among the listed files.
@@ -162,46 +257,26 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
-        if self.input.is_some() {
-            self.handle_note_key(key);
+        if self.show_help {
+            self.show_help = false;
             return;
         }
-        let page = (self.diff_height / 2).max(1);
+        if self.input.is_some() {
+            self.handle_input_key(key);
+            return;
+        }
         self.message = None;
+        let half_page = (self.diff_height / 2).max(1);
+        let page = self.diff_height.saturating_sub(1).max(1);
         match key.code {
-            KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
-            KeyCode::Esc if self.focus == Focus::Diff => self.focus = Focus::Files,
-            KeyCode::Esc => self.quit = true,
-            KeyCode::Char('c') => {
-                self.layers.comments = self.layers.comments.next();
-                self.layers_changed();
-            }
-            KeyCode::Char('v') => {
-                self.collapse_moves = !self.collapse_moves;
-                self.reset_diff_position();
-            }
-            KeyCode::Char('r') => self.toggle_reviewed(),
-            KeyCode::Char('m') => self.open_note(),
-            KeyCode::Char('E') => self.export_notes(),
-            KeyCode::Char('o') => self.request_open(),
-            KeyCode::Char('t') => {
-                self.layers.tests = self.layers.tests.next();
-                self.refilter();
-                self.refresh_moves();
-            }
-            KeyCode::Char('i') => {
-                self.layers.imports = self.layers.imports.next();
-                self.layers_changed();
-            }
-            KeyCode::Char('l') => {
-                self.layers.logging = self.layers.logging.next();
-                self.layers_changed();
-            }
-            KeyCode::Char('w') => {
-                self.layers.formatting = self.layers.formatting.next();
-                self.layers_changed();
-            }
+            KeyCode::Char('q') => self.quit = true,
+            KeyCode::Char('?') => self.show_help = true,
+            KeyCode::Esc => match self.focus {
+                Focus::Diff => self.focus = Focus::Files,
+                Focus::Files => self.search = None,
+            },
+
             KeyCode::Right | KeyCode::Enter => self.focus = Focus::Diff,
             KeyCode::Left => self.focus = Focus::Files,
             KeyCode::Tab | KeyCode::BackTab => {
@@ -218,55 +293,285 @@ impl App {
                 Focus::Files => self.select(self.selected.saturating_sub(1)),
                 Focus::Diff => self.move_cursor(self.cursor.saturating_sub(1)),
             },
-            KeyCode::Char('n') | KeyCode::Char('J') => self.select(self.selected.saturating_add(1)),
-            KeyCode::Char('p') | KeyCode::Char('K') => self.select(self.selected.saturating_sub(1)),
-            KeyCode::Char('d') | KeyCode::Char(' ') | KeyCode::PageDown => {
-                self.scroll = self.scroll.saturating_add(page);
-                self.move_cursor(self.cursor.saturating_add(page));
+            KeyCode::Char(']') => self.next_change(),
+            KeyCode::Char('[') => self.previous_change(),
+            KeyCode::Char('}') => self.select(self.selected.saturating_add(1)),
+            KeyCode::Char('{') => self.select(self.selected.saturating_sub(1)),
+            KeyCode::Char(' ') | KeyCode::PageDown => self.page(page as isize),
+            KeyCode::Char('b') | KeyCode::PageUp => self.page(-(page as isize)),
+            KeyCode::Char('d') => self.page(half_page as isize),
+            KeyCode::Char('u') => self.page(-(half_page as isize)),
+            KeyCode::Char('g') | KeyCode::Home => match self.focus {
+                Focus::Files => self.select(0),
+                Focus::Diff => self.move_cursor(0),
+            },
+            KeyCode::Char('G') | KeyCode::End => match self.focus {
+                Focus::Files => self.select(usize::MAX),
+                Focus::Diff => self.move_cursor(usize::MAX),
+            },
+            KeyCode::Char('/') => self.input = Some(Input::Search(String::new())),
+            KeyCode::Char('n') => self.find(true),
+            KeyCode::Char('N') => self.find(false),
+
+            KeyCode::Char('r') => self.toggle_reviewed(),
+            KeyCode::Char('m') => self.open_note(),
+            KeyCode::Char('E') => self.export_notes(),
+            KeyCode::Char('o') => self.request_open(),
+
+            KeyCode::Char('c') => self.toggle_hidden(Layer::Comments),
+            KeyCode::Char('C') => self.toggle_only(Layer::Comments),
+            KeyCode::Char('t') => self.toggle_hidden(Layer::Tests),
+            KeyCode::Char('T') => self.toggle_only(Layer::Tests),
+            KeyCode::Char('i') => self.toggle_hidden(Layer::Imports),
+            KeyCode::Char('I') => self.toggle_only(Layer::Imports),
+            KeyCode::Char('l') => self.toggle_hidden(Layer::Logging),
+            KeyCode::Char('L') => self.toggle_only(Layer::Logging),
+            KeyCode::Char('f') => self.toggle_hidden(Layer::Formatting),
+            KeyCode::Char('F') => self.toggle_only(Layer::Formatting),
+            KeyCode::Char('M') => {
+                let place = self.place();
+                self.collapse_moves = !self.collapse_moves;
+                self.restore(place);
             }
-            KeyCode::Char('u') | KeyCode::PageUp => {
-                self.scroll = self.scroll.saturating_sub(page);
-                self.move_cursor(self.cursor.saturating_sub(page));
-            }
-            KeyCode::Char('g') | KeyCode::Home => self.move_cursor(0),
-            KeyCode::Char('G') | KeyCode::End => self.move_cursor(usize::MAX),
             _ => {}
         }
     }
 
-    fn handle_note_key(&mut self, key: KeyEvent) {
+    fn handle_input_key(&mut self, key: KeyEvent) {
         let Some(input) = self.input.as_mut() else {
             return;
         };
+        let text = match input {
+            Input::Note(text) | Input::Search(text) => text,
+        };
         match key.code {
             KeyCode::Esc => self.input = None,
-            KeyCode::Enter => self.save_note(),
+            KeyCode::Enter => match self.input.take() {
+                Some(Input::Note(text)) => self.save_note(text),
+                Some(Input::Search(query)) => {
+                    if !query.is_empty() {
+                        self.search = Some(query);
+                    }
+                    self.find(true);
+                }
+                None => {}
+            },
             KeyCode::Backspace => {
-                input.pop();
+                text.pop();
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => input.push(c),
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => text.push(c),
             _ => {}
         }
     }
 
-    /// Opens the note editor on the cursor's line, pre-filled with any note already there.
-    fn open_note(&mut self) {
-        if self.focus != Focus::Diff {
-            self.message = Some("move into the diff (→) and pick a line to note".to_string());
+    fn layer_mut(&mut self, layer: Layer) -> &mut LayerMode {
+        match layer {
+            Layer::Comments => &mut self.layers.comments,
+            Layer::Tests => &mut self.layers.tests,
+            Layer::Imports => &mut self.layers.imports,
+            Layer::Logging => &mut self.layers.logging,
+            Layer::Formatting => &mut self.layers.formatting,
+        }
+    }
+
+    /// Lower-case layer key: hidden ↔ shown; from *only*, back to shown.
+    fn toggle_hidden(&mut self, layer: Layer) {
+        let before = self.where_am_i();
+        let mode = self.layer_mut(layer);
+        *mode = match *mode {
+            LayerMode::Shown => LayerMode::Hidden,
+            LayerMode::Hidden | LayerMode::Only => LayerMode::Shown,
+        };
+        self.layers_changed(layer, before);
+    }
+
+    /// Shifted layer key: the layer alone; pressed again, back to what it was.
+    fn toggle_only(&mut self, layer: Layer) {
+        let before = self.where_am_i();
+        let current = *self.layer_mut(layer);
+        let next = if current == LayerMode::Only {
+            self.before_only.remove(&layer).unwrap_or(LayerMode::Shown)
+        } else {
+            self.before_only.insert(layer, current);
+            LayerMode::Only
+        };
+        *self.layer_mut(layer) = next;
+        self.layers_changed(layer, before);
+    }
+
+    /// The selected file and the cursor's place in it, taken before a layer changes.
+    fn where_am_i(&self) -> (Option<usize>, Option<Place>) {
+        (self.visible.get(self.selected).copied(), self.place())
+    }
+
+    /// Re-derives everything a layer change affects, keeping the cursor on the same line
+    /// of the same file where that line is still shown.
+    fn layers_changed(&mut self, layer: Layer, (file, place): (Option<usize>, Option<Place>)) {
+        if layer == Layer::Tests {
+            self.refilter();
+        }
+        self.refresh_moves();
+        if self.visible.get(self.selected).copied() == file {
+            self.restore(place);
+        }
+    }
+
+    /// The cursor's position in file terms: its own line, or the nearest line above it.
+    fn place(&self) -> Option<Place> {
+        let view = self.diff_view();
+        let at = self.cursor.min(view.anchors.len().saturating_sub(1));
+        let anchor = (0..=at)
+            .rev()
+            .chain(at + 1..view.anchors.len())
+            .find_map(|i| view.anchors.get(i)?.as_ref())?;
+        Some(Place {
+            side: anchor.side,
+            line: anchor.line,
+            row: self.cursor.saturating_sub(self.scroll),
+        })
+    }
+
+    /// Puts the cursor back on `place` — the same line if still shown, otherwise the
+    /// closest one — at the same height on screen.
+    fn restore(&mut self, place: Option<Place>) {
+        let Some(place) = place else {
+            self.go_to_first_change();
             return;
+        };
+        let view = self.diff_view();
+        let closest = view
+            .anchors
+            .iter()
+            .enumerate()
+            .filter_map(|(i, anchor)| Some((i, anchor.as_ref()?)))
+            .min_by_key(|(_, anchor)| {
+                let other_side = usize::from(anchor.side != place.side);
+                (anchor.line.abs_diff(place.line), other_side)
+            });
+        match closest {
+            Some((index, _)) => {
+                self.cursor = index;
+                self.scroll = index.saturating_sub(place.row);
+            }
+            None => self.go_to_first_change(),
+        }
+    }
+
+    /// Moves the cursor to the next change, on into the next file that has one.
+    fn next_change(&mut self) {
+        if let Some(&line) = self
+            .diff_view()
+            .changes
+            .iter()
+            .find(|&&line| line > self.cursor)
+        {
+            self.jump_to(line);
+            return;
+        }
+        let next = (self.selected + 1..self.visible.len())
+            .find(|&position| !self.diff_view_of(position).changes.is_empty());
+        match next {
+            Some(position) => self.select(position),
+            None => self.message = Some("no more changes".to_string()),
+        }
+    }
+
+    /// Moves the cursor to the previous change, back into the previous file with one.
+    fn previous_change(&mut self) {
+        let view = self.diff_view();
+        if let Some(&line) = view.changes.iter().rev().find(|&&line| line < self.cursor) {
+            self.jump_to(line);
+            return;
+        }
+        let previous = (0..self.selected)
+            .rev()
+            .find(|&position| !self.diff_view_of(position).changes.is_empty());
+        match previous {
+            Some(position) => {
+                self.select(position);
+                if let Some(&last) = self.diff_view().changes.last() {
+                    self.jump_to(last);
+                }
+            }
+            None => self.message = Some("no earlier changes".to_string()),
+        }
+    }
+
+    /// Moves the cursor to `line`, showing the line above it for context.
+    fn jump_to(&mut self, line: usize) {
+        self.cursor = line;
+        self.scroll = line.saturating_sub(1);
+    }
+
+    fn page(&mut self, by: isize) {
+        self.scroll = self.scroll.saturating_add_signed(by);
+        self.move_cursor(self.cursor.saturating_add_signed(by));
+    }
+
+    /// Jumps to the next (or previous) line matching the search, across the listed
+    /// files, wrapping around at the ends.
+    fn find(&mut self, forward: bool) {
+        let Some(query) = self.search.clone() else {
+            self.message = Some("press / to search".to_string());
+            return;
+        };
+        let matches: Vec<(usize, usize)> = (0..self.visible.len())
+            .flat_map(|position| {
+                let view = self.diff_view_of(position);
+                view.texts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, text)| {
+                        text.as_deref()
+                            .is_some_and(|t| !find_all(t, &query).is_empty())
+                    })
+                    .map(|(line, _)| (position, line))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        if matches.is_empty() {
+            self.message = Some(format!("no match for “{query}”"));
+            return;
+        }
+        let here = (self.selected, self.cursor);
+        let index = if forward {
+            matches.iter().position(|&m| m > here).unwrap_or(0)
+        } else {
+            matches
+                .iter()
+                .rposition(|&m| m < here)
+                .unwrap_or(matches.len() - 1)
+        };
+        let (position, line) = matches[index];
+        self.select(position);
+        self.focus = Focus::Diff;
+        self.cursor = line;
+        self.scroll = line.saturating_sub(self.diff_height / 2);
+        self.message = Some(format!(
+            "match {} of {} for “{query}”",
+            index + 1,
+            matches.len()
+        ));
+    }
+
+    /// Opens the note editor on the cursor's line, pre-filled with any note already
+    /// there. From the file list it moves into the diff first.
+    fn open_note(&mut self) {
+        if self.focus == Focus::Files {
+            self.focus = Focus::Diff;
+            self.go_to_first_change();
         }
         let Some((path, anchor)) = self.cursor_anchor() else {
             self.message = Some("put the cursor on a code line to leave a note".to_string());
             return;
         };
         let existing = self.notes.find(&path, anchor.side, anchor.line);
-        self.input = Some(existing.map(|note| note.text.clone()).unwrap_or_default());
+        self.input = Some(Input::Note(
+            existing.map(|note| note.text.clone()).unwrap_or_default(),
+        ));
     }
 
-    fn save_note(&mut self) {
-        let Some(text) = self.input.take() else {
-            return;
-        };
+    fn save_note(&mut self, text: String) {
         let Some((path, anchor)) = self.cursor_anchor() else {
             return;
         };
@@ -318,35 +623,35 @@ impl App {
             return;
         }
         let path = self.root.join(&file.path);
-        let (_, anchors) = self.diff_view();
+        let view = self.diff_view();
         let new_line = |anchor: &Option<Anchor>| {
             anchor
                 .as_ref()
                 .filter(|anchor| anchor.side == NoteSide::New)
                 .map(|anchor| anchor.line)
         };
-        let from = if self.focus == Focus::Diff {
-            self.cursor
-        } else {
-            0
-        };
-        let line = anchors[from.min(anchors.len())..]
+        let from = match self.focus {
+            Focus::Diff => self.cursor,
+            Focus::Files => view.changes.first().copied().unwrap_or(0),
+        }
+        .min(view.anchors.len());
+        let line = view.anchors[from..]
             .iter()
             .find_map(new_line)
-            .or_else(|| {
-                anchors[..from.min(anchors.len())]
-                    .iter()
-                    .rev()
-                    .find_map(new_line)
-            })
+            .or_else(|| view.anchors[..from].iter().rev().find_map(new_line))
             .unwrap_or(1);
         self.open_request = Some((path, line));
     }
 
     fn cursor_anchor(&self) -> Option<(String, Anchor)> {
         let path = self.current()?.path.clone();
-        let (_, anchors) = self.diff_view();
-        Some((path, anchors.into_iter().nth(self.cursor).flatten()?))
+        let anchor = self
+            .diff_view()
+            .anchors
+            .into_iter()
+            .nth(self.cursor)
+            .flatten()?;
+        Some((path, anchor))
     }
 
     /// Marks the current file reviewed and moves on to the next unreviewed one, or
@@ -381,12 +686,12 @@ impl App {
         let index = index.min(self.visible.len().saturating_sub(1));
         if index != self.selected {
             self.selected = index;
-            self.reset_diff_position();
+            self.go_to_first_change();
         }
     }
 
     fn move_cursor(&mut self, cursor: usize) {
-        let last = self.diff_view().0.len().saturating_sub(1);
+        let last = self.diff_view().lines.len().saturating_sub(1);
         self.cursor = cursor.min(last);
         self.keep_cursor_visible();
     }
@@ -400,17 +705,25 @@ impl App {
         }
     }
 
-    /// The diff pane's lines and, for each, the file line it stands for.
-    fn diff_view(&self) -> (Vec<Line<'static>>, Vec<Option<Anchor>>) {
-        let message = |text: String| (vec![Line::from(text).dim()], vec![None]);
-        let Some(file) = self.current() else {
+    fn diff_view(&self) -> DiffView {
+        self.diff_view_of(self.selected)
+    }
+
+    /// The diff pane's content for the file at `position` in the visible list.
+    fn diff_view_of(&self, position: usize) -> DiffView {
+        let message = |text: String| DiffView {
+            lines: vec![Line::from(text).dim()],
+            anchors: vec![None],
+            texts: vec![None],
+            changes: Vec::new(),
+        };
+        let Some(file) = self.visible.get(position).map(|&index| &self.files[index]) else {
             return message(match (self.files.is_empty(), self.layers.tests) {
                 (true, _) => "No changes.".to_string(),
                 (false, LayerMode::Hidden) => {
-                    "Every changed file is a test file. Press t to cycle the test layer."
-                        .to_string()
+                    "Every changed file is a test file. Press t to show tests.".to_string()
                 }
-                (false, _) => "No test files changed. Press t to cycle the test layer.".to_string(),
+                (false, _) => "No test files changed. Press T to show the other files.".to_string(),
             });
         };
         let view = file.view(self.layers);
@@ -424,53 +737,108 @@ impl App {
             ));
         }
 
-        let mut lines = Vec::new();
-        let mut anchors = Vec::new();
+        let mut out = DiffView {
+            lines: Vec::new(),
+            anchors: Vec::new(),
+            texts: Vec::new(),
+            changes: Vec::new(),
+        };
+        let push = |out: &mut DiffView,
+                    line: Line<'static>,
+                    anchor: Option<Anchor>,
+                    text: Option<String>| {
+            out.lines.push(line);
+            out.anchors.push(anchor);
+            out.texts.push(text);
+        };
         for (hunk_index, hunk) in view.hunks.iter().enumerate() {
             if hunk_index > 0 {
-                lines.push(Line::from(""));
-                anchors.push(None);
+                push(&mut out, Line::from(""), None, None);
             }
-            lines.push(Line::from(hunk.header()).fg(Color::Cyan));
-            anchors.push(None);
+            push(
+                &mut out,
+                Line::from(hunk.header()).fg(Color::Cyan),
+                None,
+                None,
+            );
+            let mut first_change = None;
             for (row_index, row) in hunk.rows.iter().enumerate() {
-                let moved = self.moves.get(&(self.selected, hunk_index, row_index));
+                let moved = self.moves.get(&(position, hunk_index, row_index));
                 if let Some(moved) = moved
                     && moved.starts_block
                 {
                     let marker = moved.describe(&file.path);
                     let hint = if self.collapse_moves {
-                        "  (v to expand)"
+                        "  (M to expand)"
                     } else {
                         ""
                     };
-                    lines.push(
+                    if self.collapse_moves && row.kind != RowKind::Context {
+                        first_change.get_or_insert(out.lines.len());
+                    }
+                    push(
+                        &mut out,
                         Line::from(format!("              {marker}{hint}"))
                             .fg(Color::Cyan)
                             .italic(),
+                        None,
+                        None,
                     );
-                    anchors.push(None);
                 }
                 if moved.is_some() && self.collapse_moves {
                     continue;
                 }
+                if row.kind != RowKind::Context {
+                    first_change.get_or_insert(out.lines.len());
+                }
                 let anchor = anchor_of(row);
-                lines.push(row_line(row, moved.is_some()));
-                anchors.push(anchor.clone());
+                push(
+                    &mut out,
+                    row_line(row, moved.is_some(), self.search.as_deref()),
+                    anchor.clone(),
+                    Some(row.text.clone()),
+                );
                 if let Some(anchor) = anchor
                     && let Some(note) = self.notes.find(&file.path, anchor.side, anchor.line)
                 {
-                    lines.push(
+                    push(
+                        &mut out,
                         Line::from(format!("              ✎ {}", note.text))
                             .fg(Color::Yellow)
                             .bold(),
+                        Some(anchor),
+                        None,
                     );
-                    anchors.push(Some(anchor));
                 }
             }
+            out.changes.extend(first_change);
         }
-        (lines, anchors)
+        out
     }
+}
+
+/// Byte ranges of `query` in `text`; case-insensitive unless the query has a capital.
+fn find_all(text: &str, query: &str) -> Vec<Range<usize>> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let sensitive = query.chars().any(char::is_uppercase);
+    let (haystack, needle) = if sensitive {
+        (text.to_string(), query.to_string())
+    } else {
+        (text.to_lowercase(), query.to_lowercase())
+    };
+    // Lower-casing can change byte lengths outside ASCII; fall back to exact matching then.
+    if haystack.len() != text.len() {
+        return text
+            .match_indices(query)
+            .map(|(at, found)| at..at + found.len())
+            .collect();
+    }
+    haystack
+        .match_indices(&needle)
+        .map(|(at, found)| at..at + found.len())
+        .collect()
 }
 
 fn anchor_of(row: &Row) -> Option<Anchor> {
@@ -485,7 +853,7 @@ fn anchor_of(row: &Row) -> Option<Anchor> {
     })
 }
 
-fn row_line(row: &Row, moved: bool) -> Line<'static> {
+fn row_line(row: &Row, moved: bool, search: Option<&str>) -> Line<'static> {
     let number = |n: Option<usize>| n.map_or("     ".to_string(), |n| format!("{n:>5}"));
     let (sign, line, emphasis) = match (row.kind, moved) {
         (RowKind::Context, _) => (' ', Style::new(), Style::new()),
@@ -506,6 +874,13 @@ fn row_line(row: &Row, moved: bool) -> Line<'static> {
         .iter()
         .map(|(range, class)| (range.clone(), syntax_style(*class)))
         .chain(row.emphasis.iter().map(|range| (range.clone(), emphasis)))
+        .chain(
+            search
+                .map(|query| find_all(&row.text, query))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|range| (range, SEARCH_MATCH)),
+        )
         .collect();
     let mut spans = vec![
         Span::styled(
@@ -519,6 +894,7 @@ fn row_line(row: &Row, moved: bool) -> Line<'static> {
 }
 
 // 256-colour backgrounds, so terminals without true colour (Terminal.app) show them too.
+const SEARCH_MATCH: Style = Style::new().fg(Color::Black).bg(Color::Yellow);
 const MOVED_AWAY: Style = Style::new().bg(Color::Indexed(53));
 const MOVED_HERE: Style = Style::new().bg(Color::Indexed(23));
 const REMOVED: Style = Style::new().bg(Color::Indexed(52));
@@ -617,7 +993,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     );
 
     app.diff_height = diff_area.height.saturating_sub(2) as usize;
-    let (lines, _) = app.diff_view();
+    let lines = app.diff_view().lines;
     app.cursor = app.cursor.min(lines.len().saturating_sub(1));
     app.scroll = app.scroll.min(lines.len().saturating_sub(app.diff_height));
     app.keep_cursor_visible();
@@ -649,7 +1025,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     let (reviewed, listed) = app.review_progress();
     let summary = match (&app.input, &app.message) {
-        (Some(input), _) => format!("note › {input}█   (Enter save · Esc cancel · empty removes)"),
+        (Some(Input::Note(text)), _) => {
+            format!("note › {text}█   (Enter save · Esc cancel · empty removes)")
+        }
+        (Some(Input::Search(query)), _) => format!("/{query}█   (Enter search · Esc cancel)"),
         (None, Some(message)) => message.clone(),
         (None, None) => format!(
             "{} · {reviewed}/{listed} reviewed{}",
@@ -672,6 +1051,64 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         status,
     );
     frame.render_widget(Paragraph::new(HELP).dim(), help);
+    if app.show_help {
+        draw_help(frame);
+    }
+}
+
+/// The `?` screen: every key, grouped in two columns, in a box over the viewer.
+fn draw_help(frame: &mut Frame) {
+    let columns: Vec<Vec<Line>> = KEYS
+        .iter()
+        .map(|groups| {
+            let mut lines = Vec::new();
+            for (group, keys) in groups.iter() {
+                if !lines.is_empty() {
+                    lines.push(Line::from(""));
+                }
+                lines.push(Line::from(*group).bold().fg(Color::Cyan));
+                for (key, action) in *keys {
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("  {key:<12}"), Style::new().bold()),
+                        Span::raw(*action),
+                    ]));
+                }
+            }
+            lines
+        })
+        .collect();
+    let widths: Vec<u16> = columns
+        .iter()
+        .map(|lines| lines.iter().map(Line::width).max().unwrap_or(0) as u16)
+        .collect();
+    let rows = columns.iter().map(Vec::len).max().unwrap_or(0) as u16;
+    // Both columns, a three-column gap, and the border with a column of padding.
+    let area = centered(frame.area(), widths.iter().sum::<u16>() + 7, rows + 2);
+    frame.render_widget(Clear, area);
+    let block = pane(" Keys · any key closes ".to_string(), true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let [left, right] =
+        Layout::horizontal([Constraint::Length(widths[0] + 4), Constraint::Min(0)]).areas(inner);
+    let [left_column, right_column] = [left, right].map(|area| Rect {
+        x: area.x + 1,
+        width: area.width.saturating_sub(1),
+        ..area
+    });
+    let mut columns = columns.into_iter();
+    for area in [left_column, right_column] {
+        frame.render_widget(Paragraph::new(columns.next().unwrap_or_default()), area);
+    }
+}
+
+fn centered(area: Rect, width: u16, height: u16) -> Rect {
+    let [area] = Layout::horizontal([Constraint::Length(width.min(area.width))])
+        .flex(Flex::Center)
+        .areas(area);
+    let [area] = Layout::vertical([Constraint::Length(height.min(area.height))])
+        .flex(Flex::Center)
+        .areas(area);
+    area
 }
 
 /// A bordered pane; the focused one is drawn in colour so it is clear where the arrows go.

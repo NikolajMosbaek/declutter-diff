@@ -61,10 +61,10 @@ fn o_opens_the_cursor_line_and_a_removed_line_opens_where_the_code_continues() {
         Some((PathBuf::from("/repo/src/rate.ts"), 1))
     );
 
-    // Header, added `z`, context `a`, then the removed `rate` (old line 2): it opens at
-    // `b`, the next line still in the file (new line 3).
+    // Header, added `z` (where the cursor starts), context `a`, then the removed `rate`
+    // (old line 2): it opens at `b`, the next line still in the file (new line 3).
     app.handle_key(key(KeyCode::Right));
-    for _ in 0..3 {
+    for _ in 0..2 {
         app.handle_key(key(KeyCode::Down));
     }
     app.handle_key(key(KeyCode::Char('o')));

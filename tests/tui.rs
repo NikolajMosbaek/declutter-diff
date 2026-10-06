@@ -36,26 +36,36 @@ fn screen(app: &mut App) -> String {
 }
 
 #[test]
-fn pressing_c_cycles_through_the_comment_modes() {
+fn c_hides_and_shows_comments_and_shift_c_shows_them_alone() {
     let mut app = app();
+    let press = |app: &mut App, c| app.handle_key(KeyEvent::from(KeyCode::Char(c)));
 
     let hidden = screen(&mut app);
     assert!(hidden.contains("comments: hidden"), "{hidden}");
     assert!(hidden.contains("+ const rate = 0.05;"), "{hidden}");
     assert!(!hidden.contains("Fraction"), "{hidden}");
 
-    app.handle_key(KeyEvent::from(KeyCode::Char('c')));
-    let only = screen(&mut app);
-    assert!(only.contains("comments: only"), "{only}");
-    assert!(only.contains("+ // Fraction."), "{only}");
-    assert!(!only.contains("0.05"), "{only}");
-
-    app.handle_key(KeyEvent::from(KeyCode::Char('c')));
+    press(&mut app, 'c');
     let shown = screen(&mut app);
     assert!(shown.contains("all layers shown"), "{shown}");
     assert!(
         shown.contains("+ // Fraction.") && shown.contains("+ const rate = 0.05;"),
         "{shown}"
+    );
+
+    press(&mut app, 'c');
+    assert!(screen(&mut app).contains("comments: hidden"));
+
+    press(&mut app, 'C');
+    let only = screen(&mut app);
+    assert!(only.contains("comments: only"), "{only}");
+    assert!(only.contains("+ // Fraction."), "{only}");
+    assert!(!only.contains("0.05"), "{only}");
+
+    press(&mut app, 'C');
+    assert!(
+        screen(&mut app).contains("comments: hidden"),
+        "pressing C again goes back to how comments were"
     );
 }
 
@@ -90,9 +100,10 @@ fn arrow_keys_move_through_the_file_list_until_the_diff_has_focus() {
     assert!(screen(&mut app).contains(" B.swift [Swift] "));
 
     app.handle_key(KeyEvent::from(KeyCode::Right));
+    let first_change = app.cursor;
     app.handle_key(KeyEvent::from(KeyCode::Down));
     assert_eq!(app.selected, 1);
-    assert_eq!(app.cursor, 1);
+    assert_eq!(app.cursor, first_change + 1);
 
     app.handle_key(KeyEvent::from(KeyCode::Left));
     app.handle_key(KeyEvent::from(KeyCode::Up));

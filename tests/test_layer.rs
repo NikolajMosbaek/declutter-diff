@@ -151,7 +151,7 @@ fn pressing_t_keeps_the_cursor_on_the_same_file_when_it_stays_listed() {
         Some("Sources/Cart/Cart.swift")
     );
 
-    app.handle_key(KeyEvent::from(KeyCode::Char('t')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('T')));
     assert_eq!(app.layers.tests, LayerMode::Only);
     assert_eq!(
         app.current().map(|f| f.path.as_str()),
@@ -159,7 +159,11 @@ fn pressing_t_keeps_the_cursor_on_the_same_file_when_it_stays_listed() {
     );
     app.handle_key(KeyEvent::from(KeyCode::Down));
     app.handle_key(KeyEvent::from(KeyCode::Char('t')));
-    assert_eq!(app.layers.tests, LayerMode::Shown);
+    assert_eq!(
+        app.layers.tests,
+        LayerMode::Shown,
+        "t from only goes back to shown"
+    );
     assert_eq!(
         app.current().map(|f| f.path.as_str()),
         Some("web/src/cart.test.ts")

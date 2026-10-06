@@ -96,8 +96,9 @@ fn m_notes_the_cursor_line_and_e_exports_every_note() {
     let key = |code| KeyEvent::from(code);
 
     app.handle_key(key(KeyCode::Right));
-    // Line 0 is the hunk header, 1 the removed line, 2 the added one.
-    app.handle_key(key(KeyCode::Down));
+    // Line 0 is the hunk header, 1 the removed line, 2 the added one; the cursor
+    // starts on the first change.
+    assert_eq!(app.cursor, 1);
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Char('m')));
     for c in "use a fraction".chars() {

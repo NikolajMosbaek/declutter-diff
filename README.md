@@ -47,26 +47,31 @@ Viewer keys:
 
 | Key | Action |
 |-----|--------|
-| `↑` / `↓` (or `k` / `j`) | move through the files, or move the line cursor when the diff has focus |
-| `→` / `Enter`, `←` (or `Tab`) | focus the diff, back to the files |
-| `n` / `p` | next / previous file from either pane |
-| `Space` / `PgDn`, `u` / `PgUp` | page the diff |
-| `g` / `G` | top / bottom of the diff |
+| `↑` `↓` / `j` `k` | move through the files, or the diff's line cursor |
+| `←` `→` / `Tab` / `Enter` | switch between the file list and the diff |
+| `]` `[` | next / previous change, on into the next file |
+| `}` `{` | next / previous file |
+| `Space` `b` | page down / up (`d` `u` half a page) |
+| `g` `G` | top / bottom of the diff (first / last file in the file list) |
+| `/` `n` `N` | search the diff; next / previous match (smart case) |
 | `r` | mark the file reviewed and jump to the next unreviewed one (again to unmark) |
-| `m` | leave a note on the line under the cursor (diff pane) |
+| `m` | leave a note on the line under the cursor |
 | `E` | copy all notes to the clipboard as one prompt for a coding agent |
-| `c` | cycle comments: hidden → only → shown |
-| `t` | cycle tests: shown → hidden → only |
-| `i` / `l` | cycle imports / logging: shown → hidden → only |
-| `w` | cycle formatting-only changes: shown → hidden → only |
-| `v` | collapse moved blocks to their one-line marker, or expand them |
 | `o` | open the file in `$VISUAL` / `$EDITOR` at the cursor's line |
-| `q` | quit (`Esc` leaves the diff first) |
+| `c` `t` `i` `l` `f` | hide / show comments, tests, imports, logging, formatting-only changes |
+| `C` `T` `I` `L` `F` | show only that layer; press again to go back |
+| `M` | collapse moved blocks to their one-line marker, or expand them |
+| `?` | every key |
+| `Esc` | back: leave the diff, close a prompt, clear the search |
+| `q` | quit |
+
+Toggling a layer keeps the cursor on the same line of the file (or the closest one still
+shown), so you can flip comments on and off without losing your place.
 
 Layers combine: everything set to *hidden* is cut out together. A layer set to *only*
 wins — with comments on *only* you see just the comment changes, whatever else is hidden.
 
-**Moved code.** A block of three or more lines removed in one place and added in another —
+**Moved code** (`M` collapses). A block of three or more lines removed in one place and added in another —
 same file or a different one, re-indented or not — is drawn in its own tint with a marker
 (`⇄ 14 lines moved to Checkout.swift:173`) at each end, in the viewer and in `--print`.
 

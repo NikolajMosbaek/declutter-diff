@@ -35,21 +35,19 @@ OPTIONS:
     -h, --help           Show this help
     -V, --version        Show the version
 
-KEYS (viewer):
-    ↑ / ↓     move through the files, or scroll the diff when it has focus
-    → / ←     focus the diff / the file list (also Tab, Enter)
-    n / p     next / previous file from either pane
-    r         mark the file reviewed and go to the next one (again to unmark)
-    m         leave a note on the line under the cursor (in the diff pane)
-    E         copy all notes to the clipboard as a prompt for a coding agent
-    space     page down; u up; g / G top / bottom
-    c         cycle comments: hidden → only → shown
-    t         cycle tests: shown → hidden → only
-    i / l     cycle imports / logging statements: shown → hidden → only
-    w         cycle formatting (whitespace-only) changes: shown → hidden → only
-    v         collapse moved blocks to a one-line marker, or expand them again
-    o         open the file in $VISUAL / $EDITOR at the cursor's line
-    q         quit
+KEYS (viewer; press ? for the full list):
+    ↑ ↓  j k    move through the files, or the diff's line cursor
+    ← →  Tab    switch between the file list and the diff
+    ] [         next / previous change, on into the next file
+    } {         next / previous file
+    Space  b    page down / up; d u half a page; g G top / bottom
+    /  n  N     search; next / previous match
+    r           mark the file reviewed and go to the next one
+    m  E  o     note a line; copy all notes as a prompt; open in $EDITOR
+    c t i l f   hide / show comments, tests, imports, logging, formatting
+    C T I L F   show only that layer (again to go back)
+    M           collapse moved blocks
+    q           quit
 ";
 
 struct Args {

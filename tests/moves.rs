@@ -133,7 +133,7 @@ fn printed_output_marks_where_a_block_went() {
 }
 
 #[test]
-fn v_collapses_moved_blocks_to_their_marker() {
+fn shift_m_collapses_moved_blocks_to_their_marker() {
     let mut app = App::new(moved_across_files(), Layers::default());
     let screen = |app: &mut App| {
         let mut terminal = Terminal::new(TestBackend::new(120, 20)).expect("terminal");
@@ -155,10 +155,10 @@ fn v_collapses_moved_blocks_to_their_marker() {
     assert!(expanded.contains("- func validate"), "{expanded}");
     assert!(expanded.contains("1 moved block"), "{expanded}");
 
-    app.handle_key(KeyEvent::from(KeyCode::Char('v')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('M')));
     let collapsed = screen(&mut app);
     assert!(
-        collapsed.contains("⇄ 4 lines moved to Checkout.swift:2  (v to expand)"),
+        collapsed.contains("⇄ 4 lines moved to Checkout.swift:2  (M to expand)"),
         "{collapsed}"
     );
     assert!(!collapsed.contains("- func validate"), "{collapsed}");

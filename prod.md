@@ -28,7 +28,7 @@ Treat a diff as layers that can be switched on and off:
 | `t` | Tests | Test files (by path convention or test-framework import); later, test blocks inside source files |
 | `i` | Imports | `import` / `use` / `#include` statements |
 | `l` | Logging | Statements that only call a logging API (`print`, `console.*`, `logger.*`, …) |
-| `w` | Formatting | Changes that only move whitespace: re-indent, re-space, re-wrap |
+| `f` | Formatting | Changes that only move whitespace: re-indent, re-space, re-wrap |
 
 Toggle comments off and the diff shows only code changes: comment-only hunks disappear,
 and a line that changed code *and* a trailing comment shows only the code change. A status
@@ -131,8 +131,8 @@ changes, with correct line numbers, and toggling back restores the full diff.
 - Review marks (`r`), remembered per change, so a re-pushed file comes back unreviewed.
 - Word-level highlighting inside edited lines, and syntax colouring.
 - Line notes (`m`) exported as one prompt for a coding agent (`E`, `declutter notes`).
-- Imports (`i`), logging (`l`) and formatting-only (`w`) layers.
-- Moved-code detection across files, collapsible with `v`.
+- Imports (`i`), logging (`l`) and formatting-only (`f`) layers; Shift + a layer key shows that layer alone.
+- Moved-code detection across files, collapsible with `M`.
 - Fewer partial Swift parses, and the line of the first error when one remains.
 - Open in editor at the cursor's line (`o`).
 
