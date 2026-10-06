@@ -227,7 +227,7 @@ fn file_with_syntax_errors_is_marked_partial_and_still_decluttered() {
         "// New note.\nfunc broken( {\n",
     );
 
-    assert_eq!(file.detection, Detection::Partial(Lang::Swift));
+    assert_eq!(file.detection, Detection::Partial(Lang::Swift, 2));
     assert!(file.view(LayerMode::Hidden).hunks.is_empty());
 }
 

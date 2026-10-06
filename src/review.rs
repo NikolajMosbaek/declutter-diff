@@ -48,8 +48,9 @@ pub struct FileChange {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Detection {
     Parsed(Lang),
-    /// Parsed with syntax errors; layers near an error may be missed.
-    Partial(Lang),
+    /// Parsed with syntax errors; layers near the error may be missed. Holds the line of
+    /// the first error, in the new version if it has one.
+    Partial(Lang, usize),
     /// No grammar for this file type, so nothing but whole test files is hidden.
     Unsupported,
     Binary,
@@ -59,7 +60,9 @@ impl Detection {
     pub fn label(self) -> String {
         match self {
             Detection::Parsed(lang) => lang.name().to_string(),
-            Detection::Partial(lang) => format!("{}, partial parse", lang.name()),
+            Detection::Partial(lang, line) => {
+                format!("{}, partial parse near line {line}", lang.name())
+            }
             Detection::Unsupported => "no grammar".to_string(),
             Detection::Binary => "binary".to_string(),
         }
@@ -222,10 +225,9 @@ impl FileReview {
                 .and_then(|lang| Some((lang, classify(lang, &old)?, classify(lang, &new)?)))
             {
                 Some((lang, old_c, new_c)) => {
-                    let detection = if old_c.partial || new_c.partial {
-                        Detection::Partial(lang)
-                    } else {
-                        Detection::Parsed(lang)
+                    let detection = match new_c.error_line.or(old_c.error_line) {
+                        Some(line) => Detection::Partial(lang, line),
+                        None => Detection::Parsed(lang),
                     };
                     (detection, old_c, new_c)
                 }
@@ -276,7 +278,7 @@ impl FileReview {
     fn hunks_for(&self, modes: DiffModes) -> Vec<Hunk> {
         let (mode, layers) = modes.effective();
         let lang = match self.detection {
-            Detection::Parsed(lang) | Detection::Partial(lang) => Some(lang),
+            Detection::Parsed(lang) | Detection::Partial(lang, _) => Some(lang),
             _ => None,
         };
         let side = |src: &str, classified: &Classified| {
@@ -426,7 +428,7 @@ impl Summary {
             }
             match file.detection {
                 Detection::Unsupported => summary.unsupported_files += 1,
-                Detection::Partial(_) => summary.partial_files += 1,
+                Detection::Partial(..) => summary.partial_files += 1,
                 _ => {}
             }
         }

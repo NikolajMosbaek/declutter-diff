@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use tree_sitter::{Node, Parser};
 
-use crate::lang::Lang;
+use crate::lang::{Lang, parsable};
 
 /// The span layers of one version of a file. Each is a list of byte ranges in
 /// document order, non-overlapping within the layer.
@@ -14,9 +14,9 @@ pub struct Classified {
     pub imports: Vec<Range<usize>>,
     /// Statements that only log: `print(…)`, `console.log(…)`, `logger.debug(…)`.
     pub logging: Vec<Range<usize>>,
-    /// The parser recovered from syntax errors. Comments are still collected,
-    /// but some may be missed or misplaced near the error.
-    pub partial: bool,
+    /// One-based line of the first syntax error the parser recovered from. Layers are
+    /// still collected, but some may be missed or misplaced near it.
+    pub error_line: Option<usize>,
 }
 
 /// Finds every comment, import and logging statement in `src`. Returns `None` only if
@@ -24,7 +24,7 @@ pub struct Classified {
 pub fn classify(lang: Lang, src: &str) -> Option<Classified> {
     let mut parser = Parser::new();
     parser.set_language(&lang.grammar()).ok()?;
-    let tree = parser.parse(src, None)?;
+    let tree = parser.parse(parsable(lang, src).as_ref(), None)?;
 
     // Comments are tree-sitter "extras": they can appear at any depth, so walk every node.
     let mut classified = Classified::default();
@@ -53,7 +53,7 @@ pub fn classify(lang: Lang, src: &str) -> Option<Classified> {
         }
     }
 
-    classified.partial = tree.root_node().has_error();
+    classified.error_line = first_error(tree.root_node()).map(|node| node.start_position().row + 1);
     Some(classified)
 }
 
@@ -168,4 +168,24 @@ fn is_logging_callee(lang: Lang, callee: &str) -> bool {
                 || receiver == "log"
                 || receiver.ends_with("logger")
         })
+}
+
+fn first_error(root: Node) -> Option<Node> {
+    if !root.has_error() {
+        return None;
+    }
+    let mut node = root;
+    'descend: loop {
+        if node.is_error() || node.is_missing() {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.has_error() || child.is_missing() {
+                node = child;
+                continue 'descend;
+            }
+        }
+        return Some(node);
+    }
 }

@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
-use crate::lang::Lang;
+use crate::lang::{Lang, parsable};
 use crate::project::Projection;
 
 /// The syntax categories the viewer colours.
@@ -57,7 +57,9 @@ pub fn annotate(projection: &mut Projection, lang: Lang) {
 
     let mut classes: Vec<LineClasses> = vec![Vec::new(); projection.lines.len()];
     let mut highlighter = Highlighter::new();
-    let Ok(events) = highlighter.highlight(config, source.as_bytes(), None, None, |_| None) else {
+    let parse_text = parsable(lang, &source);
+    let Ok(events) = highlighter.highlight(config, parse_text.as_bytes(), None, None, |_| None)
+    else {
         return;
     };
     let mut active: Vec<Class> = Vec::new();

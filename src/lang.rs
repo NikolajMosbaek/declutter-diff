@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::Path;
 
 use tree_sitter::Language;
@@ -54,4 +55,59 @@ impl Lang {
             Lang::Python => kind == "comment",
         }
     }
+}
+
+/// The text handed to the parser in place of `src`: always the same length, byte for
+/// byte, so every range found in it is a range in `src` too.
+///
+/// It papers over constructs tree-sitter-swift 0.7 cannot parse, each of which leaves
+/// an error that can swallow the rest of a function:
+///
+/// - the empty tuple `()` used as a value (`.success(())`, `resume(returning: ())`,
+///   `value ?? ()`) becomes the empty array literal `[]`, which parses there;
+/// - `await` opening an `if`/`while`/`guard` condition (`if await a != b`) is blanked;
+/// - `nonisolated(unsafe)` loses its `(unsafe)`.
+///
+/// None of these touch a comment, an import or a logging call's extent.
+pub fn parsable(lang: Lang, src: &str) -> Cow<'_, str> {
+    if lang != Lang::Swift {
+        return Cow::Borrowed(src);
+    }
+    let mut out = src.as_bytes().to_vec();
+    let mut blank = |range: std::ops::Range<usize>, with: &[u8]| {
+        out[range.clone()].copy_from_slice(&with[..range.len()]);
+    };
+
+    for (at, _) in src.match_indices("()") {
+        let before = src[..at].trim_end();
+        let after = src[at + 2..].trim_start();
+        let value_position = matches!(before.chars().last(), Some('(' | ',' | ':' | '=' | '?'))
+            && !before.ends_with("->")
+            && !["->", "throws", "async"]
+                .iter()
+                .any(|word| after.starts_with(word));
+        if value_position {
+            blank(at..at + 2, b"[]");
+        }
+    }
+    for (at, _) in src.match_indices("await ") {
+        let before = src[..at].trim_end();
+        let opens_condition = ["if", "while", "guard"].iter().any(|keyword| {
+            before.ends_with(keyword)
+                && !before[..before.len() - keyword.len()]
+                    .ends_with(|c: char| c.is_alphanumeric() || c == '_')
+        });
+        if opens_condition {
+            blank(at..at + 5, b"     ");
+        }
+    }
+    for (at, _) in src.match_indices("nonisolated(unsafe)") {
+        blank(at + 11..at + 19, b"        ");
+    }
+
+    if out == src.as_bytes() {
+        return Cow::Borrowed(src);
+    }
+    // Only ASCII bytes were swapped for ASCII bytes, so the text is still valid UTF-8.
+    Cow::Owned(String::from_utf8(out).unwrap_or_else(|_| src.to_string()))
 }

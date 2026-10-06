@@ -99,6 +99,12 @@ changes, with correct line numbers, and toggling back restores the full diff.
 - **Blank lines are layout when comments are hidden.** An added docstring or comment usually
   brings a blank line with it; showing that blank line as a change is noise. With comments
   hidden, added or removed blank lines are not shown as changes (context blank lines stay).
+- **Swift the grammar can't parse is stood in for.** tree-sitter-swift 0.7 rejects the empty
+  tuple as a value (`.success(())`), `await` opening a condition (`if await a != b`) and
+  `nonisolated(unsafe)`. Before parsing, these are swapped for same-length text that parses
+  (`[]`, blanks), so every byte offset still points into the real file. On a 878-file Swift
+  codebase this halved the files with parse errors (20 → 10); the rest report the line of
+  the first error ("partial parse near line 80").
 - **Unsupported file types hide nothing** and are counted in the status line
   ("comments not detected in N files").
 - **Default mode is comments hidden** — that is the point of opening the tool.
