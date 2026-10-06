@@ -137,4 +137,3 @@ None combine a structural parse with reviewer-controlled layer toggles.
   Possibly a separate `d` layer.
 - How to present a hunk where the code change is only meaningful with its comment (e.g. a
   `// SAFETY:` justification)? Likely: hide by default, flag specially-marked comments.
-- Name of the binary: `declutter` vs `dd` (taken by coreutils) vs something else.
