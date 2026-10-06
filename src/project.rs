@@ -1,43 +1,43 @@
 use std::ops::Range;
 
-/// What the reviewer sees of the comment layer.
+/// What the reviewer sees of a layer: all of it, none of it, or only it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommentMode {
+pub enum LayerMode {
     Shown,
     Hidden,
     Only,
 }
 
-impl CommentMode {
-    pub const ALL: [CommentMode; 3] = [CommentMode::Shown, CommentMode::Hidden, CommentMode::Only];
+impl LayerMode {
+    pub const ALL: [LayerMode; 3] = [LayerMode::Shown, LayerMode::Hidden, LayerMode::Only];
 
-    pub fn next(self) -> CommentMode {
+    pub fn next(self) -> LayerMode {
         match self {
-            CommentMode::Hidden => CommentMode::Only,
-            CommentMode::Only => CommentMode::Shown,
-            CommentMode::Shown => CommentMode::Hidden,
+            LayerMode::Hidden => LayerMode::Only,
+            LayerMode::Only => LayerMode::Shown,
+            LayerMode::Shown => LayerMode::Hidden,
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            CommentMode::Shown => "shown",
-            CommentMode::Hidden => "hidden",
-            CommentMode::Only => "only",
+            LayerMode::Shown => "shown",
+            LayerMode::Hidden => "hidden",
+            LayerMode::Only => "only",
         }
     }
 
-    pub fn parse(value: &str) -> Option<CommentMode> {
-        CommentMode::ALL
+    pub fn parse(value: &str) -> Option<LayerMode> {
+        LayerMode::ALL
             .into_iter()
             .find(|mode| mode.label() == value)
     }
 
     pub(crate) fn index(self) -> usize {
         match self {
-            CommentMode::Shown => 0,
-            CommentMode::Hidden => 1,
-            CommentMode::Only => 2,
+            LayerMode::Shown => 0,
+            LayerMode::Hidden => 1,
+            LayerMode::Only => 2,
         }
     }
 }
@@ -51,7 +51,7 @@ pub struct Projection {
     pub orig: Vec<usize>,
 }
 
-pub fn project(src: &str, comments: &[Range<usize>], mode: CommentMode) -> Projection {
+pub fn project(src: &str, comments: &[Range<usize>], mode: LayerMode) -> Projection {
     let mut projection = Projection::default();
     let mut next_comment = 0;
     let mut line_start = 0;
@@ -74,9 +74,9 @@ pub fn project(src: &str, comments: &[Range<usize>], mode: CommentMode) -> Proje
             .collect();
 
         let kept = match mode {
-            CommentMode::Shown => Some(line.to_string()),
-            CommentMode::Hidden => without_cuts(line, &cuts),
-            CommentMode::Only => only_cuts(line, &cuts),
+            LayerMode::Shown => Some(line.to_string()),
+            LayerMode::Hidden => without_cuts(line, &cuts),
+            LayerMode::Only => only_cuts(line, &cuts),
         };
         if let Some(text) = kept {
             projection.lines.push(text);

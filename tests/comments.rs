@@ -1,8 +1,8 @@
 use declutter::classify::classify;
 use declutter::diff::{Hunk, RowKind};
 use declutter::lang::Lang;
-use declutter::project::{CommentMode, project};
-use declutter::review::{ChangeStatus, Detection, FileChange, FileReview, Summary};
+use declutter::project::{LayerMode, project};
+use declutter::review::{ChangeStatus, Detection, FileChange, FileReview, Layers, Summary};
 
 fn review(path: &str, old: &str, new: &str) -> FileReview {
     FileReview::new(FileChange {
@@ -16,7 +16,7 @@ fn review(path: &str, old: &str, new: &str) -> FileReview {
 }
 
 /// The changed rows of a view as `-text` / `+text`.
-fn changes(file: &FileReview, mode: CommentMode) -> Vec<String> {
+fn changes(file: &FileReview, mode: LayerMode) -> Vec<String> {
     file.view(mode)
         .hunks
         .iter()
@@ -34,7 +34,7 @@ fn changes(file: &FileReview, mode: CommentMode) -> Vec<String> {
 
 fn hidden_projection(lang: Lang, src: &str) -> Vec<String> {
     let comments = classify(lang, src).expect("parser runs").comments;
-    project(src, &comments, CommentMode::Hidden).lines
+    project(src, &comments, LayerMode::Hidden).lines
 }
 
 #[test]
@@ -45,9 +45,9 @@ fn comment_only_change_disappears_when_comments_are_hidden() {
         "def total(xs):\n    # Sum every element of the list.\n    return sum(xs)\n",
     );
 
-    assert_eq!(file.view(CommentMode::Shown).hunks.len(), 1);
-    assert!(file.view(CommentMode::Hidden).hunks.is_empty());
-    assert_eq!(file.view(CommentMode::Hidden).hidden_hunks, 1);
+    assert_eq!(file.view(LayerMode::Shown).hunks.len(), 1);
+    assert!(file.view(LayerMode::Hidden).hunks.is_empty());
+    assert_eq!(file.view(LayerMode::Hidden).hidden_hunks, 1);
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn changed_line_with_new_trailing_comment_shows_only_the_code_change() {
     );
 
     assert_eq!(
-        changes(&file, CommentMode::Hidden),
+        changes(&file, LayerMode::Hidden),
         ["-const retries = 1;", "+const retries = 3;"]
     );
 }
@@ -68,7 +68,7 @@ fn changed_line_with_new_trailing_comment_shows_only_the_code_change() {
 fn trailing_comment_added_to_unchanged_code_is_hidden() {
     let file = review("main.ts", "start();\n", "start(); // kick off the loop\n");
 
-    assert!(file.view(CommentMode::Hidden).hunks.is_empty());
+    assert!(file.view(LayerMode::Hidden).hunks.is_empty());
 }
 
 #[test]
@@ -77,7 +77,7 @@ fn block_comment_spanning_a_hunk_boundary_keeps_original_line_numbers() {
     let new = "func setup() {}\n/* One\n two\n three\n four\n five\n six\n seven\n eight, revised */\nfunc value() -> Int { 2 }\n";
     let file = review("Value.swift", old, new);
 
-    let hunks = &file.view(CommentMode::Hidden).hunks;
+    let hunks = &file.view(LayerMode::Hidden).hunks;
     assert_eq!(hunks.len(), 1);
     let rows: Vec<_> = hunks[0]
         .rows
@@ -158,14 +158,14 @@ fn comment_markers_inside_strings_are_code() {
     let py = review("tag.py", "tag = \"# one\"\n", "tag = \"# two\"\n");
 
     assert_eq!(
-        changes(&ts, CommentMode::Hidden),
+        changes(&ts, LayerMode::Hidden),
         [
             "-const url = \"http://a.example\";",
             "+const url = \"http://b.example\";"
         ]
     );
     assert_eq!(
-        changes(&py, CommentMode::Hidden),
+        changes(&py, LayerMode::Hidden),
         ["-tag = \"# one\"", "+tag = \"# two\""]
     );
 }
@@ -189,8 +189,8 @@ fn blank_lines_added_with_a_comment_are_hidden_with_it() {
         "a = 1\n\n# b depends on a\nb = 2\n",
     );
 
-    assert!(file.view(CommentMode::Hidden).hunks.is_empty());
-    assert_eq!(file.view(CommentMode::Hidden).hidden_hunks, 1);
+    assert!(file.view(LayerMode::Hidden).hunks.is_empty());
+    assert_eq!(file.view(LayerMode::Hidden).hidden_hunks, 1);
 }
 
 #[test]
@@ -202,7 +202,7 @@ fn comments_only_shows_just_the_comment_changes() {
     );
 
     assert_eq!(
-        changes(&file, CommentMode::Only),
+        changes(&file, LayerMode::Only),
         ["-// Rate in percent.", "+// Rate as a fraction."]
     );
 }
@@ -215,8 +215,8 @@ fn code_only_change_is_hidden_in_comments_only_mode() {
         "// Sum.\nconst n = 2;\n",
     );
 
-    assert!(file.view(CommentMode::Only).hunks.is_empty());
-    assert_eq!(file.view(CommentMode::Only).hidden_hunks, 1);
+    assert!(file.view(LayerMode::Only).hunks.is_empty());
+    assert_eq!(file.view(LayerMode::Only).hidden_hunks, 1);
 }
 
 #[test]
@@ -228,7 +228,7 @@ fn file_with_syntax_errors_is_marked_partial_and_still_decluttered() {
     );
 
     assert_eq!(file.detection, Detection::Partial(Lang::Swift));
-    assert!(file.view(CommentMode::Hidden).hunks.is_empty());
+    assert!(file.view(LayerMode::Hidden).hunks.is_empty());
 }
 
 #[test]
@@ -237,8 +237,8 @@ fn unsupported_file_type_hides_nothing() {
 
     assert_eq!(file.detection, Detection::Unsupported);
     assert_eq!(
-        file.view(CommentMode::Hidden).hunks,
-        file.view(CommentMode::Shown).hunks
+        file.view(LayerMode::Hidden).hunks,
+        file.view(LayerMode::Shown).hunks
     );
 }
 
@@ -251,8 +251,8 @@ fn status_line_reports_what_is_hidden() {
     ];
 
     assert_eq!(
-        Summary::new(&files, CommentMode::Hidden).status_line(CommentMode::Hidden),
-        "comments: hidden · showing 2 of 3 hunks · 1 comment-only hunk hidden · 1 comment-only file · comments not detected in 1 file"
+        Summary::new(&files, Layers::default()).status_line(Layers::default()),
+        "comments: hidden · tests: shown · showing 2 of 3 hunks · 1 comment-only hunk hidden · 1 comment-only file · comments not detected in 1 file"
     );
 }
 
@@ -265,7 +265,7 @@ fn blank_lines_are_layout_when_comments_are_hidden() {
     );
 
     assert_eq!(
-        changes(&file, CommentMode::Hidden),
+        changes(&file, LayerMode::Hidden),
         ["-        return 0", "+        return 1"]
     );
 }

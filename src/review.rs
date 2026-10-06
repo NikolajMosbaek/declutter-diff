@@ -3,7 +3,8 @@ use std::collections::HashSet;
 use crate::classify::classify;
 use crate::diff::{Hunk, RowKind, diff};
 use crate::lang::Lang;
-use crate::project::{CommentMode, project};
+use crate::project::{LayerMode, project};
+use crate::test_files::is_test_file;
 
 /// Unchanged lines shown around each change.
 pub const CONTEXT: usize = 3;
@@ -74,6 +75,8 @@ pub struct FileReview {
     pub old_path: Option<String>,
     pub status: ChangeStatus,
     pub detection: Detection,
+    /// The whole file is test code; the test layer is file-granular.
+    pub is_test: bool,
     views: [ModeView; 3],
 }
 
@@ -100,13 +103,13 @@ impl FileReview {
             }
         };
 
-        let hunks_for = |mode: CommentMode| {
+        let hunks_for = |mode: LayerMode| {
             let mut hunks = diff(
                 &project(old, &old_comments, mode),
                 &project(new, &new_comments, mode),
                 CONTEXT,
             );
-            if mode == CommentMode::Hidden {
+            if mode == LayerMode::Hidden {
                 // Added or removed blank lines are layout: they mostly travel with a
                 // comment, and they never change what the code does.
                 for hunk in &mut hunks {
@@ -118,9 +121,9 @@ impl FileReview {
             hunks
         };
 
-        let full = hunks_for(CommentMode::Shown);
-        let views = CommentMode::ALL.map(|mode| {
-            let hunks = if mode == CommentMode::Shown {
+        let full = hunks_for(LayerMode::Shown);
+        let views = LayerMode::ALL.map(|mode| {
+            let hunks = if mode == LayerMode::Shown {
                 full.clone()
             } else {
                 hunks_for(mode)
@@ -131,21 +134,42 @@ impl FileReview {
             }
         });
 
+        let is_test = is_test_file(&change.path, if new.is_empty() { old } else { new });
         FileReview {
             path: change.path,
             old_path: change.old_path,
             status: change.status,
             detection,
+            is_test,
             views,
         }
     }
 
-    pub fn view(&self, mode: CommentMode) -> &ModeView {
+    pub fn view(&self, mode: LayerMode) -> &ModeView {
         &self.views[mode.index()]
     }
 
     pub fn total_hunks(&self) -> usize {
-        self.view(CommentMode::Shown).hunks.len()
+        self.view(LayerMode::Shown).hunks.len()
+    }
+
+    /// Whether the file is listed at all under this test-layer mode.
+    pub fn is_visible(&self, tests: LayerMode) -> bool {
+        match tests {
+            LayerMode::Shown => true,
+            LayerMode::Hidden => !self.is_test,
+            LayerMode::Only => self.is_test,
+        }
+    }
+
+    /// The bracketed tag after the file name: language or detection problem, and `test`.
+    pub fn tag(&self) -> String {
+        let detection = self.detection.label();
+        if self.is_test {
+            format!("{detection}, test")
+        } else {
+            detection
+        }
     }
 }
 
@@ -170,27 +194,47 @@ fn count_hidden(full: &[Hunk], visible: &[Hunk]) -> usize {
         .count()
 }
 
-/// Totals across all files for one mode.
+/// What the reviewer has chosen to see of each layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Layers {
+    pub comments: LayerMode,
+    pub tests: LayerMode,
+}
+
+impl Default for Layers {
+    fn default() -> Layers {
+        Layers {
+            comments: LayerMode::Hidden,
+            tests: LayerMode::Shown,
+        }
+    }
+}
+
+/// Totals across the files visible under one choice of layers.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Summary {
     pub files: usize,
     pub total_hunks: usize,
     pub visible_hunks: usize,
     pub hidden_hunks: usize,
-    /// Files with changes, none of them visible in this mode.
+    /// Files with changes, none of them visible in this comment mode.
     pub fully_hidden_files: usize,
+    /// Files left out by the test layer: test files when hidden, the rest when only.
+    pub filtered_files: usize,
     pub unsupported_files: usize,
     pub partial_files: usize,
 }
 
 impl Summary {
-    pub fn new(files: &[FileReview], mode: CommentMode) -> Summary {
-        let mut summary = Summary {
-            files: files.len(),
-            ..Summary::default()
-        };
+    pub fn new(files: &[FileReview], layers: Layers) -> Summary {
+        let mut summary = Summary::default();
         for file in files {
-            let view = file.view(mode);
+            if !file.is_visible(layers.tests) {
+                summary.filtered_files += 1;
+                continue;
+            }
+            let view = file.view(layers.comments);
+            summary.files += 1;
             summary.total_hunks += file.total_hunks();
             summary.visible_hunks += view.hunks.len();
             summary.hidden_hunks += view.hidden_hunks;
@@ -206,17 +250,20 @@ impl Summary {
         summary
     }
 
-    pub fn status_line(&self, mode: CommentMode) -> String {
-        let mut parts = vec![format!("comments: {}", mode.label())];
-        match mode {
-            CommentMode::Shown => parts.push(format!(
+    pub fn status_line(&self, layers: Layers) -> String {
+        let mut parts = vec![
+            format!("comments: {}", layers.comments.label()),
+            format!("tests: {}", layers.tests.label()),
+        ];
+        match layers.comments {
+            LayerMode::Shown => parts.push(format!(
                 "{} {} in {} {}",
                 self.total_hunks,
                 plural(self.total_hunks, "hunk"),
                 self.files,
                 plural(self.files, "file")
             )),
-            CommentMode::Hidden => {
+            LayerMode::Hidden => {
                 parts.push(format!(
                     "showing {} of {} hunks",
                     self.visible_hunks, self.total_hunks
@@ -234,7 +281,7 @@ impl Summary {
                     ));
                 }
             }
-            CommentMode::Only => {
+            LayerMode::Only => {
                 parts.push(format!(
                     "{} {} with comment changes",
                     self.visible_hunks,
@@ -246,6 +293,19 @@ impl Summary {
                     plural(self.hidden_hunks, "hunk")
                 ));
             }
+        }
+        match layers.tests {
+            LayerMode::Shown => {}
+            LayerMode::Hidden => parts.push(format!(
+                "{} test {} hidden",
+                self.filtered_files,
+                plural(self.filtered_files, "file")
+            )),
+            LayerMode::Only => parts.push(format!(
+                "{} non-test {} hidden",
+                self.filtered_files,
+                plural(self.filtered_files, "file")
+            )),
         }
         if self.unsupported_files > 0 {
             parts.push(format!(

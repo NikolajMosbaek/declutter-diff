@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 use declutter::git::{RangeSpec, load};
-use declutter::project::CommentMode;
+use declutter::project::LayerMode;
 use declutter::review::{ChangeStatus, FileReview};
 use tempfile::TempDir;
 
@@ -85,13 +85,13 @@ fn working_tree_includes_modified_deleted_and_untracked_files() {
     );
     assert!(
         by_path(&files, "notes.py")
-            .view(CommentMode::Hidden)
+            .view(LayerMode::Hidden)
             .hunks
             .is_empty()
     );
     assert_eq!(
         by_path(&files, "logic.ts")
-            .view(CommentMode::Hidden)
+            .view(LayerMode::Hidden)
             .hunks
             .len(),
         1

@@ -7,11 +7,11 @@ use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::diff::RowKind;
-use crate::project::CommentMode;
+use crate::project::LayerMode;
 use crate::render::{empty_message, file_title};
-use crate::review::{Detection, FileReview, Summary};
+use crate::review::{Detection, FileReview, Layers, Summary};
 
-const HELP: &str = " ↑/↓ move   ←/→ or Tab switch pane   n/p next/prev file   space/PgDn page   g/G top/bottom   c comments   q quit";
+const HELP: &str = " ↑/↓ move   ←/→ or Tab switch pane   n/p next/prev file   space/PgDn page   g/G top/bottom   c comments   t tests   q quit";
 
 /// The pane the arrow keys act on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,7 +22,10 @@ pub enum Focus {
 
 pub struct App {
     pub files: Vec<FileReview>,
-    pub mode: CommentMode,
+    pub layers: Layers,
+    /// Indices into `files` of the files the test layer currently lists.
+    visible: Vec<usize>,
+    /// Position in the visible list.
     pub selected: usize,
     pub scroll: usize,
     pub focus: Focus,
@@ -32,15 +35,41 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(files: Vec<FileReview>, mode: CommentMode) -> App {
-        App {
+    pub fn new(files: Vec<FileReview>, layers: Layers) -> App {
+        let mut app = App {
             files,
-            mode,
+            layers,
+            visible: Vec::new(),
             selected: 0,
             scroll: 0,
             focus: Focus::Files,
             quit: false,
             diff_height: 20,
+        };
+        app.refilter();
+        app
+    }
+
+    /// The file under the cursor, if any file is listed.
+    pub fn current(&self) -> Option<&FileReview> {
+        self.visible
+            .get(self.selected)
+            .map(|&index| &self.files[index])
+    }
+
+    /// Rebuilds the visible list after the test layer changed, keeping the cursor on
+    /// the same file when it is still listed.
+    fn refilter(&mut self) {
+        let current = self.visible.get(self.selected).copied();
+        self.visible = (0..self.files.len())
+            .filter(|&index| self.files[index].is_visible(self.layers.tests))
+            .collect();
+        match current.and_then(|index| self.visible.iter().position(|&i| i == index)) {
+            Some(position) => self.selected = position,
+            None => {
+                self.selected = self.selected.min(self.visible.len().saturating_sub(1));
+                self.scroll = 0;
+            }
         }
     }
 
@@ -52,8 +81,12 @@ impl App {
             KeyCode::Esc if self.focus == Focus::Diff => self.focus = Focus::Files,
             KeyCode::Esc => self.quit = true,
             KeyCode::Char('c') => {
-                self.mode = self.mode.next();
+                self.layers.comments = self.layers.comments.next();
                 self.scroll = 0;
+            }
+            KeyCode::Char('t') => {
+                self.layers.tests = self.layers.tests.next();
+                self.refilter();
             }
             KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter => self.focus = Focus::Diff,
             KeyCode::Left | KeyCode::Char('h') => self.focus = Focus::Files,
@@ -86,7 +119,7 @@ impl App {
     }
 
     fn select(&mut self, index: usize) {
-        let index = index.min(self.files.len().saturating_sub(1));
+        let index = index.min(self.visible.len().saturating_sub(1));
         if index != self.selected {
             self.selected = index;
             self.scroll = 0;
@@ -99,10 +132,18 @@ impl App {
     }
 
     fn diff_lines(&self) -> Vec<Line<'static>> {
-        let Some(file) = self.files.get(self.selected) else {
-            return vec![Line::from("No changes.")];
+        let Some(file) = self.current() else {
+            let message = match (self.files.is_empty(), self.layers.tests) {
+                (true, _) => "No changes.",
+                (false, LayerMode::Hidden) => {
+                    "Every changed file is a test file. Press t to cycle the test layer."
+                }
+                (false, _) => "No test files changed. Press t to cycle the test layer.",
+            };
+            return vec![Line::from(message).dim()];
         };
-        let view = file.view(self.mode);
+        let mode = self.layers.comments;
+        let view = file.view(mode);
         if file.detection == Detection::Binary {
             return vec![Line::from("Binary file not shown.").dim()];
         }
@@ -110,7 +151,7 @@ impl App {
             return vec![
                 Line::from(format!(
                     "No visible changes: {}.",
-                    empty_message(file, self.mode)
+                    empty_message(file, mode)
                 ))
                 .dim(),
             ];
@@ -154,15 +195,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Layout::horizontal([Constraint::Percentage(30), Constraint::Min(20)]).areas(main);
 
     let items: Vec<ListItem> = app
-        .files
+        .visible
         .iter()
-        .map(|file| {
-            let visible = file.view(app.mode).hunks.len();
+        .map(|&index| {
+            let file = &app.files[index];
+            let visible = file.view(app.layers.comments).hunks.len();
             let item = ListItem::new(format!("{} ({visible})", file_title(file)));
             if visible == 0 { item.dim() } else { item }
         })
         .collect();
-    let mut list_state = ListState::default().with_selected(Some(app.selected));
+    let mut list_state =
+        ListState::default().with_selected((!app.visible.is_empty()).then_some(app.selected));
     frame.render_stateful_widget(
         List::new(items)
             .block(pane(" Files ".to_string(), app.focus == Focus::Files))
@@ -175,9 +218,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let lines = app.diff_lines();
     app.scroll = app.scroll.min(lines.len().saturating_sub(app.diff_height));
     let title = app
-        .files
-        .get(app.selected)
-        .map(|file| format!(" {} [{}] ", file.path, file.detection.label()))
+        .current()
+        .map(|file| format!(" {} [{}] ", file.path, file.tag()))
         .unwrap_or_default();
     frame.render_widget(
         Paragraph::new(lines)
@@ -186,7 +228,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         diff_area,
     );
 
-    let summary = Summary::new(&app.files, app.mode).status_line(app.mode);
+    let summary = Summary::new(&app.files, app.layers).status_line(app.layers);
     frame.render_widget(
         Paragraph::new(format!(" {summary}")).style(Style::new().add_modifier(Modifier::REVERSED)),
         status,
@@ -206,8 +248,8 @@ fn pane(title: String, focused: bool) -> Block<'static> {
     }
 }
 
-pub fn run(files: Vec<FileReview>, mode: CommentMode) -> Result<()> {
-    let mut app = App::new(files, mode);
+pub fn run(files: Vec<FileReview>, layers: Layers) -> Result<()> {
+    let mut app = App::new(files, layers);
     ratatui::run(|terminal: &mut DefaultTerminal| -> Result<()> {
         while !app.quit {
             terminal.draw(|frame| draw(frame, &mut app))?;

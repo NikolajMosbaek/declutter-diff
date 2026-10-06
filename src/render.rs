@@ -1,16 +1,17 @@
 use std::fmt::Write;
 
 use crate::diff::RowKind;
-use crate::project::CommentMode;
-use crate::review::{Detection, FileReview, Summary};
+use crate::project::LayerMode;
+use crate::review::{Detection, FileReview, Layers, Summary};
 
 /// The decluttered diff as plain text. Line numbers in hunk headers refer to the
 /// original files, so the output is for reading, not for `git apply`.
-pub fn plain(files: &[FileReview], mode: CommentMode) -> String {
+pub fn plain(files: &[FileReview], layers: Layers) -> String {
+    let mode = layers.comments;
     let mut out = String::new();
-    for file in files {
+    for file in files.iter().filter(|file| file.is_visible(layers.tests)) {
         let view = file.view(mode);
-        let _ = writeln!(out, "{} [{}]", file_title(file), file.detection.label());
+        let _ = writeln!(out, "{} [{}]", file_title(file), file.tag());
         if file.detection == Detection::Binary {
             let _ = writeln!(out, "  (binary file not shown)");
         } else if view.hunks.is_empty() {
@@ -29,7 +30,7 @@ pub fn plain(files: &[FileReview], mode: CommentMode) -> String {
         }
         let _ = writeln!(out);
     }
-    let _ = writeln!(out, "{}", Summary::new(files, mode).status_line(mode));
+    let _ = writeln!(out, "{}", Summary::new(files, layers).status_line(layers));
     out
 }
 
@@ -41,15 +42,15 @@ pub fn file_title(file: &FileReview) -> String {
 }
 
 /// Why a file with changes shows nothing in this mode.
-pub fn empty_message(file: &FileReview, mode: CommentMode) -> String {
+pub fn empty_message(file: &FileReview, mode: LayerMode) -> String {
     let hidden = file.view(mode).hidden_hunks;
     match mode {
         _ if file.total_hunks() == 0 => "no textual changes".to_string(),
-        CommentMode::Hidden => format!(
+        LayerMode::Hidden => format!(
             "comment-only changes: {hidden} hunk{} hidden",
             if hidden == 1 { "" } else { "s" }
         ),
-        CommentMode::Only => "no comment changes".to_string(),
-        CommentMode::Shown => "no changes".to_string(),
+        LayerMode::Only => "no comment changes".to_string(),
+        LayerMode::Shown => "no changes".to_string(),
     }
 }

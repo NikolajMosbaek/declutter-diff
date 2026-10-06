@@ -25,7 +25,7 @@ Treat a diff as layers that can be switched on and off:
 | Key | Layer | What it covers |
 |-----|-------|----------------|
 | `c` | Comments | Line and block comments, doc comments, Python docstrings |
-| `t` | Tests | Test files (by path convention) and test blocks inside source files |
+| `t` | Tests | Test files (by path convention or test-framework import); later, test blocks inside source files |
 | `i` | Imports | `import` / `use` / `#include` statements |
 | `l` | Logging | Calls to known logging APIs (later; per-language config) |
 
@@ -102,9 +102,25 @@ changes, with correct line numbers, and toggling back restores the full diff.
   ("comments not detected in N files").
 - **Default mode is comments hidden** — that is the point of opening the tool.
 
+### Decisions made while adding the tests layer
+
+- **Tests are file-granular.** A file is test code when its path says so (a `test`/`tests`/
+  `spec`/`__tests__`/`__mocks__`/`__snapshots__` directory, a directory ending in `Tests`, or a
+  `FooTests`/`FooTest`/`FooSpec`, `.test.`/`.spec.`, `test_`/`_test`/`_spec` file name), or when a
+  Swift, Python or TypeScript file imports a test framework (`@testable import`, `import XCTest`,
+  `import Testing`, `pytest`, `unittest`, `vitest`, `@jest/globals`, `node:test`,
+  `@testing-library/`). Hidden test files leave the file list entirely; *only* lists nothing else.
+- **Tests default to shown.** Unlike comments, tests are code a reviewer must read; hiding them
+  is a choice for ordering the review, not the starting point.
+- **The two layers are independent.** Comments mode applies inside test files too, so
+  "tests only, comments hidden" reviews just the test logic.
+- **In-file test blocks are not detected yet** (Rust `#[cfg(test)]`, a stray `@Test` in a
+  source file). In Swift, Python and TypeScript projects tests live in their own files, so path
+  rules cover the common case.
+
 ## Roadmap after v0
 
-1. Tests layer (path conventions + in-file test blocks).
+1. In-file test blocks for the tests layer (Rust `#[cfg(test)] mod tests`, `@Test` in sources).
 2. Imports layer; more languages (Go, Rust, Kotlin, Java, C#).
 3. Side-by-side view, file tree with per-file hidden counts, "mark file reviewed".
 4. `git difftool` integration and JSON/patch output.

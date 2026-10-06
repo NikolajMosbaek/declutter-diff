@@ -3,12 +3,12 @@ use std::process::ExitCode;
 
 use anyhow::{Result, bail};
 use declutter::git::{RangeSpec, load};
-use declutter::project::CommentMode;
-use declutter::review::FileReview;
+use declutter::project::LayerMode;
+use declutter::review::{FileReview, Layers};
 use declutter::{render, tui};
 
 const USAGE: &str = "\
-declutter — review a diff with comments shown, hidden, or on their own
+declutter — review a diff with comments and tests shown, hidden, or on their own
 
 USAGE:
     declutter [OPTIONS] [REVISION | A..B | A...B]
@@ -17,7 +17,8 @@ USAGE:
 
 OPTIONS:
     --staged             Compare against the index instead of the working tree
-    --comments <MODE>    Start in MODE: hidden (default), only, shown
+    --comments <MODE>    Start comments in MODE: hidden (default), only, shown
+    --tests <MODE>       Start tests in MODE: shown (default), hidden, only
     -p, --print          Print the diff instead of opening the viewer
     -h, --help           Show this help
     -V, --version        Show the version
@@ -28,13 +29,14 @@ KEYS (viewer):
     n / p     next / previous file from either pane
     space     page down; u up; g / G top / bottom
     c         cycle comments: hidden → only → shown
+    t         cycle tests: shown → hidden → only
     q         quit
 ";
 
 struct Args {
     range: Option<String>,
     staged: bool,
-    mode: CommentMode,
+    layers: Layers,
     print: bool,
 }
 
@@ -42,7 +44,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
     let mut args = Args {
         range: None,
         staged: false,
-        mode: CommentMode::Hidden,
+        layers: Layers::default(),
         print: false,
     };
     let mut raw = raw.peekable();
@@ -64,14 +66,18 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
             }
             "--staged" | "--cached" => args.staged = true,
             "-p" | "--print" => args.print = true,
-            "--comments" => {
+            "--comments" | "--tests" => {
                 let Some(value) = inline.or_else(|| raw.next()) else {
-                    bail!("--comments needs a value: hidden, only or shown");
+                    bail!("{flag} needs a value: hidden, only or shown");
                 };
-                let Some(mode) = CommentMode::parse(&value) else {
-                    bail!("unknown --comments value `{value}`: use hidden, only or shown");
+                let Some(mode) = LayerMode::parse(&value) else {
+                    bail!("unknown {flag} value `{value}`: use hidden, only or shown");
                 };
-                args.mode = mode;
+                if flag == "--comments" {
+                    args.layers.comments = mode;
+                } else {
+                    args.layers.tests = mode;
+                }
             }
             _ if arg.starts_with('-') => bail!("unknown option `{arg}` (see --help)"),
             _ if args.range.is_some() => bail!("only one revision or range can be given"),
@@ -92,7 +98,7 @@ fn run() -> Result<()> {
         .collect();
 
     if args.print {
-        print!("{}", render::plain(&files, args.mode));
+        print!("{}", render::plain(&files, args.layers));
         return Ok(());
     }
     if files.is_empty() {
@@ -102,7 +108,7 @@ fn run() -> Result<()> {
     if !std::io::stdout().is_terminal() {
         bail!("stdout is not a terminal; use --print for text output");
     }
-    tui::run(files, args.mode)
+    tui::run(files, args.layers)
 }
 
 fn main() -> ExitCode {

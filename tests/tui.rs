@@ -1,5 +1,4 @@
-use declutter::project::CommentMode;
-use declutter::review::{ChangeStatus, FileChange, FileReview};
+use declutter::review::{ChangeStatus, FileChange, FileReview, Layers};
 use declutter::tui::{App, draw};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -14,7 +13,7 @@ fn app() -> App {
         new: Some("// Fraction.\nconst rate = 0.05;\n".to_string()),
         binary: false,
     });
-    App::new(vec![file], CommentMode::Hidden)
+    App::new(vec![file], Layers::default())
 }
 
 fn screen(app: &mut App) -> String {
@@ -82,7 +81,7 @@ fn arrow_keys_move_through_the_file_list_until_the_diff_has_focus() {
             change("A.swift", "let a = 1\n", "let a = 2\n"),
             change("B.swift", &long_old, &long_new),
         ],
-        CommentMode::Hidden,
+        Layers::default(),
     );
     screen(&mut app);
 
