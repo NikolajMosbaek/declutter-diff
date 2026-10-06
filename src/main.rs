@@ -47,6 +47,7 @@ KEYS (viewer):
     t         cycle tests: shown → hidden → only
     i / l     cycle imports / logging statements: shown → hidden → only
     w         cycle formatting (whitespace-only) changes: shown → hidden → only
+    v         collapse moved blocks to a one-line marker, or expand them again
     q         quit
 ";
 

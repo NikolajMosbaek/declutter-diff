@@ -59,10 +59,15 @@ Viewer keys:
 | `t` | cycle tests: shown → hidden → only |
 | `i` / `l` | cycle imports / logging: shown → hidden → only |
 | `w` | cycle formatting-only changes: shown → hidden → only |
+| `v` | collapse moved blocks to their one-line marker, or expand them |
 | `q` | quit (`Esc` leaves the diff first) |
 
 Layers combine: everything set to *hidden* is cut out together. A layer set to *only*
 wins — with comments on *only* you see just the comment changes, whatever else is hidden.
+
+**Moved code.** A block of three or more lines removed in one place and added in another —
+same file or a different one, re-indented or not — is drawn in its own tint with a marker
+(`⇄ 14 lines moved to Checkout.swift:173`) at each end, in the viewer and in `--print`.
 
 The status line always says what is hidden, e.g.
 `comments: hidden · tests: hidden · showing 7 of 12 hunks · 5 comment-only hunks hidden · 4 test files hidden`.

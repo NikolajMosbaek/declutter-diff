@@ -13,12 +13,13 @@ use ratatui::{DefaultTerminal, Frame};
 
 use crate::diff::{Row, RowKind};
 use crate::highlight::Class;
+use crate::moves::{Direction, Moves, detect};
 use crate::project::LayerMode;
 use crate::render::{empty_message, file_title};
 use crate::review::{Detection, FileReview, Layers, Summary};
 use crate::store::{Note, NoteSide, NoteStore, ReviewStore};
 
-const HELP: &str = " ↑/↓ move   ←/→ switch pane   n/p file   space page   r reviewed   m note   E export notes   c comments   t tests   i imports   l logging   w formatting   q quit";
+const HELP: &str = " ↑/↓ move   ←/→ switch pane   n/p file   space page   r reviewed   m note   E export notes   c comments   t tests   i imports   l logging   w formatting   v moves   q quit";
 
 /// The pane the arrow keys act on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +57,10 @@ pub struct App {
     /// A one-off message for the status bar, cleared by the next key.
     pub message: Option<String>,
     pub clipboard: Clipboard,
+    /// Moved blocks among the listed files, keyed by (visible position, hunk, row).
+    moves: Moves,
+    /// Show each moved block as its one-line marker only.
+    pub collapse_moves: bool,
     pub quit: bool,
     /// Height of the diff pane at the last draw, for paging and keeping the cursor visible.
     diff_height: usize,
@@ -90,10 +95,13 @@ impl App {
             input: None,
             message: None,
             clipboard: system_clipboard,
+            moves: Moves::new(),
+            collapse_moves: false,
             quit: false,
             diff_height: 20,
         };
         app.refilter();
+        app.refresh_moves();
         app
     }
 
@@ -125,6 +133,25 @@ impl App {
         self.scroll = 0;
     }
 
+    /// Re-finds moved blocks: what counts as moved depends on the layers and the files listed.
+    fn refresh_moves(&mut self) {
+        let listed: Vec<&FileReview> = self.visible.iter().map(|&i| &self.files[i]).collect();
+        self.moves = detect(&listed, self.layers.into());
+    }
+
+    fn layers_changed(&mut self) {
+        self.reset_diff_position();
+        self.refresh_moves();
+    }
+
+    /// Number of moved blocks among the listed files.
+    pub fn moved_blocks(&self) -> usize {
+        self.moves
+            .values()
+            .filter(|moved| moved.starts_block && moved.direction == Direction::To)
+            .count()
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) {
         if self.input.is_some() {
             self.handle_note_key(key);
@@ -139,6 +166,10 @@ impl App {
             KeyCode::Esc => self.quit = true,
             KeyCode::Char('c') => {
                 self.layers.comments = self.layers.comments.next();
+                self.layers_changed();
+            }
+            KeyCode::Char('v') => {
+                self.collapse_moves = !self.collapse_moves;
                 self.reset_diff_position();
             }
             KeyCode::Char('r') => self.toggle_reviewed(),
@@ -147,18 +178,19 @@ impl App {
             KeyCode::Char('t') => {
                 self.layers.tests = self.layers.tests.next();
                 self.refilter();
+                self.refresh_moves();
             }
             KeyCode::Char('i') => {
                 self.layers.imports = self.layers.imports.next();
-                self.reset_diff_position();
+                self.layers_changed();
             }
             KeyCode::Char('l') => {
                 self.layers.logging = self.layers.logging.next();
-                self.reset_diff_position();
+                self.layers_changed();
             }
             KeyCode::Char('w') => {
                 self.layers.formatting = self.layers.formatting.next();
-                self.reset_diff_position();
+                self.layers_changed();
             }
             KeyCode::Right | KeyCode::Enter => self.focus = Focus::Diff,
             KeyCode::Left => self.focus = Focus::Files,
@@ -348,16 +380,36 @@ impl App {
 
         let mut lines = Vec::new();
         let mut anchors = Vec::new();
-        for (i, hunk) in view.hunks.iter().enumerate() {
-            if i > 0 {
+        for (hunk_index, hunk) in view.hunks.iter().enumerate() {
+            if hunk_index > 0 {
                 lines.push(Line::from(""));
                 anchors.push(None);
             }
             lines.push(Line::from(hunk.header()).fg(Color::Cyan));
             anchors.push(None);
-            for row in &hunk.rows {
+            for (row_index, row) in hunk.rows.iter().enumerate() {
+                let moved = self.moves.get(&(self.selected, hunk_index, row_index));
+                if let Some(moved) = moved
+                    && moved.starts_block
+                {
+                    let marker = moved.describe(&file.path);
+                    let hint = if self.collapse_moves {
+                        "  (v to expand)"
+                    } else {
+                        ""
+                    };
+                    lines.push(
+                        Line::from(format!("              {marker}{hint}"))
+                            .fg(Color::Cyan)
+                            .italic(),
+                    );
+                    anchors.push(None);
+                }
+                if moved.is_some() && self.collapse_moves {
+                    continue;
+                }
                 let anchor = anchor_of(row);
-                lines.push(row_line(row));
+                lines.push(row_line(row, moved.is_some()));
                 anchors.push(anchor.clone());
                 if let Some(anchor) = anchor
                     && let Some(note) = self.notes.find(&file.path, anchor.side, anchor.line)
@@ -387,12 +439,15 @@ fn anchor_of(row: &Row) -> Option<Anchor> {
     })
 }
 
-fn row_line(row: &Row) -> Line<'static> {
+fn row_line(row: &Row, moved: bool) -> Line<'static> {
     let number = |n: Option<usize>| n.map_or("     ".to_string(), |n| format!("{n:>5}"));
-    let (sign, line, emphasis) = match row.kind {
-        RowKind::Context => (' ', Style::new(), Style::new()),
-        RowKind::Removed => ('-', REMOVED, REMOVED_EMPHASIS),
-        RowKind::Added => ('+', ADDED, ADDED_EMPHASIS),
+    let (sign, line, emphasis) = match (row.kind, moved) {
+        (RowKind::Context, _) => (' ', Style::new(), Style::new()),
+        // Moved lines get their own tint: nothing about them changed but their place.
+        (RowKind::Removed, true) => ('-', MOVED_AWAY, MOVED_AWAY),
+        (RowKind::Added, true) => ('+', MOVED_HERE, MOVED_HERE),
+        (RowKind::Removed, false) => ('-', REMOVED, REMOVED_EMPHASIS),
+        (RowKind::Added, false) => ('+', ADDED, ADDED_EMPHASIS),
     };
     // Without syntax colours, colour the text itself so the change still stands out.
     let style = match row.kind {
@@ -418,6 +473,8 @@ fn row_line(row: &Row) -> Line<'static> {
 }
 
 // 256-colour backgrounds, so terminals without true colour (Terminal.app) show them too.
+const MOVED_AWAY: Style = Style::new().bg(Color::Indexed(53));
+const MOVED_HERE: Style = Style::new().bg(Color::Indexed(23));
 const REMOVED: Style = Style::new().bg(Color::Indexed(52));
 const ADDED: Style = Style::new().bg(Color::Indexed(22));
 const REMOVED_EMPHASIS: Style = Style::new()
@@ -554,6 +611,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             match app.notes.notes().len() {
                 0 => String::new(),
                 n => format!(" · {n} note{}", if n == 1 { "" } else { "s" }),
+            } + &match (app.moved_blocks(), app.collapse_moves) {
+                (0, _) => String::new(),
+                (n, collapsed) => format!(
+                    " · {n} moved block{}{}",
+                    if n == 1 { "" } else { "s" },
+                    if collapsed { " (collapsed)" } else { "" }
+                ),
             }
         ),
     };

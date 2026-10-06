@@ -14,6 +14,7 @@ pub mod diff;
 pub mod git;
 pub mod highlight;
 pub mod lang;
+pub mod moves;
 pub mod pr;
 pub mod project;
 pub mod render;
