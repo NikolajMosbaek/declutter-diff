@@ -152,9 +152,9 @@ fn base_overrides_the_main_branch_and_alone_compares_the_current_branch() {
     let against_feature = target(dir, &["on-feature"], Some("origin/feature")).expect("resolve");
     assert_eq!(paths(dir, &against_feature), ["f.py"]);
 
-    let current = target(dir, &[], Some("origin/main")).expect("resolve");
-    assert_eq!(current.label, "origin/main...HEAD");
-    assert_eq!(paths(dir, &current), ["b.py", "f.py"]);
+    let current = target(dir, &[], Some("origin/feature")).expect("resolve");
+    assert_eq!(current.label, "origin/feature...on-feature + uncommitted");
+    assert_eq!(paths(dir, &current), ["f.py"]);
 }
 
 #[test]
@@ -189,4 +189,54 @@ fn without_origin_the_main_branch_is_main_or_master() {
     git(dir.path(), &["commit", "-q", "-m", "base"]);
 
     assert_eq!(default_branch(dir.path()).as_deref(), Some("master"));
+}
+
+#[test]
+fn no_arguments_on_a_branch_shows_everything_the_branch_changes() {
+    let (_upstream, clone) = upstream_and_clone();
+    let dir = clone.path();
+    git(dir, &["checkout", "-q", "-b", "work", "origin/feature"]);
+    write(dir, "g.py", "g = 1\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "committed on the branch"]);
+    write(dir, "b.py", "b = 2\n");
+    write(dir, "h.py", "h = 1\n");
+
+    let target = target(dir, &[], None).expect("resolve");
+    assert_eq!(target.label, "origin/main...work + uncommitted");
+    // b.py: the branch's commit plus an uncommitted edit; g.py committed; h.py untracked.
+    // c.py landed on main after the branch split off, so it is not part of the branch.
+    assert_eq!(paths(dir, &target), ["b.py", "g.py", "h.py"]);
+}
+
+#[test]
+fn no_arguments_on_the_main_branch_shows_only_uncommitted_work() {
+    let (_upstream, clone) = upstream_and_clone();
+    let dir = clone.path();
+    write(dir, "a.py", "a = 2\n");
+
+    let on_main = target(dir, &[], None).expect("resolve");
+    assert_eq!(on_main.label, "HEAD → working tree");
+    assert_eq!(paths(dir, &on_main), ["a.py"]);
+
+    git(dir, &["checkout", "-q", "--detach"]);
+    assert_eq!(
+        target(dir, &[], None).expect("resolve").label,
+        "HEAD → working tree"
+    );
+}
+
+#[test]
+fn staged_on_a_branch_leaves_out_unstaged_work() {
+    let (_upstream, clone) = upstream_and_clone();
+    let dir = clone.path();
+    git(dir, &["checkout", "-q", "-b", "work", "origin/feature"]);
+    write(dir, "g.py", "g = 1\n");
+    git(dir, &["add", "g.py"]);
+    write(dir, "h.py", "h = 1\n");
+    let args: Vec<String> = Vec::new();
+
+    let target = resolve_target(dir, &args, true, None, &NoCli).expect("resolve");
+    assert_eq!(target.label, "origin/main...work + staged");
+    assert_eq!(paths(dir, &target), ["b.py", "g.py"]);
 }

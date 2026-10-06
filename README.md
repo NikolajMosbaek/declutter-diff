@@ -30,12 +30,13 @@ cargo build --release
 Run inside a git repository:
 
 ```sh
-declutter                                  # your uncommitted work (untracked files included)
+declutter                                  # the branch you're on vs main, uncommitted work included
 declutter <PR URL>                         # a GitHub or Azure DevOps pull request
 declutter pr 42                            # PR 42 of the repository origin points at
 declutter feature/login                    # a branch vs main, from where it split off
 declutter feature/login --base develop     # … vs another branch
-declutter --base main                      # the current branch vs main
+declutter --base develop                   # the branch you're on vs develop
+declutter HEAD                             # only your uncommitted work
 declutter main...feature                   # any range, as in git diff
 declutter HEAD~3                           # a revision vs the working tree
 declutter --staged                         # HEAD vs the index
@@ -49,6 +50,9 @@ declutter --tests hidden                   # start with test files left out
   shows it. It is read from the merge ref both hosts publish, so all it needs is git's own
   access to the remote; only when there is no merge ref (a conflicting or closed PR) does it
   ask the `gh` or `az` CLI for the branches.
+- **No arguments** — on a branch, everything it changes: its commits since it split off from
+  the main branch plus whatever isn't committed yet, untracked files included. On the main
+  branch itself (or a detached HEAD) it shows just the uncommitted work.
 - **Branches** — a local branch, or one on `origin` (fetched first if you don't have it yet),
   is compared with the main branch: what `origin/HEAD` points at, else `main` or `master`.
   `--base` picks another. Naming the main branch itself, or any other revision, compares it

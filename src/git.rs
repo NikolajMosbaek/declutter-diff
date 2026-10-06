@@ -71,10 +71,12 @@ pub fn load(dir: &Path, spec: &RangeSpec) -> Result<Vec<FileChange>> {
     let root = repo_root(dir)?;
 
     let old_rev = if spec.merge_base {
-        let Side::Rev(new_rev) = &spec.new else {
-            bail!("a merge-base range needs two revisions");
+        // Against the working tree or the index, the branch being measured is HEAD's.
+        let tip = match &spec.new {
+            Side::Rev(new_rev) => new_rev.as_str(),
+            Side::Index | Side::Worktree => "HEAD",
         };
-        String::from_utf8(git(&root, &["merge-base", &spec.old, new_rev])?)?
+        String::from_utf8(git(&root, &["merge-base", &spec.old, tip])?)?
             .trim()
             .to_string()
     } else {

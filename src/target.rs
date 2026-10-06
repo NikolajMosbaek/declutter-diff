@@ -14,8 +14,9 @@ pub struct Target {
 
 /// Works out what the command-line arguments ask to review:
 ///
-/// - nothing: HEAD against the working tree (or the index with `staged`), or, with
-///   `base`, the current branch against `base`;
+/// - nothing: on a branch other than the main one, everything that branch changes —
+///   its commits since it split off from the main branch (or `base`), plus uncommitted
+///   and untracked work; on the main branch, just the uncommitted work;
 /// - a GitHub or Azure DevOps PR URL, or `pr <url | number>`: that pull request;
 /// - a branch: that branch against the default branch (`base` overrides it), from the
 ///   point where it branched off — a branch only on `origin` is fetched first;
@@ -47,13 +48,24 @@ pub fn resolve_target(
         [command, target] if command == "pr" => pr(target),
         [command] if command == "pr" => bail!("`pr` needs a pull-request URL or number"),
         [url] if parse_pr_url(url).is_some() => pr(url),
-        [] => match base {
-            Some(base) => branch_against(dir, "HEAD", base, staged),
-            None => Ok(Target {
-                spec: RangeSpec::parse(None, staged)?,
-                label: format!("HEAD → {worktree}"),
-            }),
-        },
+        [] => {
+            let branch = current_branch(dir);
+            let base = match base {
+                Some(base) => Some(base.to_string()),
+                None => default_branch(dir).filter(|main| {
+                    branch
+                        .as_deref()
+                        .is_some_and(|branch| short_name(main) != branch)
+                }),
+            };
+            match base {
+                Some(base) => current_branch_against(dir, branch.as_deref(), &base, staged),
+                None => Ok(Target {
+                    spec: RangeSpec::parse(None, staged)?,
+                    label: format!("HEAD → {worktree}"),
+                }),
+            }
+        }
         [range] if range.contains("..") => Ok(Target {
             spec: RangeSpec::parse(Some(range), staged)?,
             label: range.clone(),
@@ -81,6 +93,32 @@ pub fn resolve_target(
         },
         _ => bail!("give one branch, revision, range or PR"),
     }
+}
+
+/// The current branch's commits since it split off from `base`, plus what is not
+/// committed yet (staged only, with `staged`).
+fn current_branch_against(
+    dir: &Path,
+    branch: Option<&str>,
+    base: &str,
+    staged: bool,
+) -> Result<Target> {
+    if !exists(dir, &format!("{base}^{{commit}}")) {
+        bail!("no branch or revision named `{base}` to compare against");
+    }
+    let (side, uncommitted) = if staged {
+        (Side::Index, "staged")
+    } else {
+        (Side::Worktree, "uncommitted")
+    };
+    Ok(Target {
+        spec: RangeSpec {
+            old: base.to_string(),
+            new: side,
+            merge_base: true,
+        },
+        label: format!("{base}...{} + {uncommitted}", branch.unwrap_or("HEAD")),
+    })
 }
 
 fn branch_against(dir: &Path, branch: &str, base: &str, staged: bool) -> Result<Target> {
