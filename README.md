@@ -30,18 +30,31 @@ cargo build --release
 Run inside a git repository:
 
 ```sh
-declutter                    # HEAD vs working tree, untracked files included
-declutter --staged           # HEAD vs index
-declutter main               # main vs working tree
-declutter main..feature      # two revisions
-declutter main...feature     # feature vs its merge base with main
-declutter pr 42               # PR 42 of the repository origin points at
-declutter pr <PR URL>         # a GitHub or Azure DevOps pull request
-declutter --print            # print instead of opening the viewer
-declutter -p --comments only # print only the comment changes
-declutter --tests hidden     # start with test files left out
-declutter --logging only     # start with only the logging changes
+declutter                                  # your uncommitted work (untracked files included)
+declutter <PR URL>                         # a GitHub or Azure DevOps pull request
+declutter pr 42                            # PR 42 of the repository origin points at
+declutter feature/login                    # a branch vs main, from where it split off
+declutter feature/login --base develop     # … vs another branch
+declutter --base main                      # the current branch vs main
+declutter main...feature                   # any range, as in git diff
+declutter HEAD~3                           # a revision vs the working tree
+declutter --staged                         # HEAD vs the index
+declutter --print                          # print instead of opening the viewer
+declutter -p --comments only               # print only the comment changes
+declutter --tests hidden                   # start with test files left out
 ```
+
+- **Pull requests** — paste the URL from the browser. The PR is fetched into
+  `refs/declutter/pr/<n>/` (no local branch is created or moved) and shown as the PR page
+  shows it. It is read from the merge ref both hosts publish, so all it needs is git's own
+  access to the remote; only when there is no merge ref (a conflicting or closed PR) does it
+  ask the `gh` or `az` CLI for the branches.
+- **Branches** — a local branch, or one on `origin` (fetched first if you don't have it yet),
+  is compared with the main branch: what `origin/HEAD` points at, else `main` or `master`.
+  `--base` picks another. Naming the main branch itself, or any other revision, compares it
+  with your working tree.
+
+The file list's title says what is being compared (`origin/main...feature/login`, `PR 115115`).
 
 Viewer keys:
 
@@ -77,11 +90,6 @@ same file or a different one, re-indented or not — is drawn in its own tint wi
 
 The status line always says what is hidden, e.g.
 `comments: hidden · tests: hidden · showing 7 of 12 hunks · 5 comment-only hunks hidden · 4 test files hidden`.
-
-`pr` looks the pull request up with the `gh` (GitHub) or `az` (Azure DevOps) CLI, so
-whichever account those are signed in with is used. It fetches the PR's branches into
-`refs/declutter/pr/<n>/` — no local branch is created or moved — and shows the PR branch
-against its merge base, the same diff the PR page shows.
 
 Review marks are saved per repository in `.git/declutter/reviewed.tsv` (shared by
 worktrees, never committed). A mark belongs to the exact change, so a file you reviewed

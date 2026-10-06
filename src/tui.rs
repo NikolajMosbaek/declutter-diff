@@ -163,6 +163,8 @@ pub struct App {
     pub root: PathBuf,
     /// A file and line to open in the editor, for the run loop to carry out.
     pub open_request: Option<(PathBuf, usize)>,
+    /// What is being reviewed, shown over the file list: "origin/main...feature", "PR 7".
+    pub title: String,
     pub quit: bool,
     /// Height of the diff pane at the last draw, for paging and keeping the cursor visible.
     diff_height: usize,
@@ -204,6 +206,7 @@ impl App {
             before_only: HashMap::new(),
             root: PathBuf::from("."),
             open_request: None,
+            title: String::new(),
             quit: false,
             diff_height: 20,
         };
@@ -986,7 +989,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         ListState::default().with_selected((!app.visible.is_empty()).then_some(app.selected));
     frame.render_stateful_widget(
         List::new(items)
-            .block(pane(" Files ".to_string(), app.focus == Focus::Files))
+            .block(pane(
+                if app.title.is_empty() {
+                    " Files ".to_string()
+                } else {
+                    format!(" {} ", app.title)
+                },
+                app.focus == Focus::Files,
+            ))
             .highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
         files_area,
         &mut list_state,
@@ -1154,9 +1164,11 @@ pub fn run(
     store: ReviewStore,
     notes: NoteStore,
     root: PathBuf,
+    title: String,
 ) -> Result<()> {
     let mut app = App::with_stores(files, layers, store, notes);
     app.root = root;
+    app.title = title;
     ratatui::run(|terminal: &mut DefaultTerminal| -> Result<()> {
         while !app.quit {
             terminal.draw(|frame| draw(frame, &mut app))?;

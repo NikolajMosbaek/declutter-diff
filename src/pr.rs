@@ -257,7 +257,8 @@ fn percent_decode(segment: &str) -> String {
 
 /// Turns a PR URL or number into a range: fetches the PR's base and head into
 /// `refs/declutter/pr/<n>/` (so no local branch is touched) and compares the head
-/// against its merge base with the base, as the PR page does.
+/// against its merge base with the base, as the PR page does. The host's CLI is only
+/// asked when the remote publishes no merge ref for the PR.
 pub fn resolve(dir: &Path, target: &str, lookup: &dyn PrLookup) -> Result<RangeSpec> {
     let remotes = remotes(dir)?;
     let pr = match target.parse::<u64>() {
@@ -288,8 +289,27 @@ pub fn resolve(dir: &Path, target: &str, lookup: &dyn PrLookup) -> Result<RangeS
             )
         })?;
 
-    let refs = lookup.refs(&pr)?;
     let local = |side: &str| format!("refs/declutter/pr/{}/{side}", pr.number);
+    let spec = RangeSpec {
+        old: local("base"),
+        new: Side::Rev(local("head")),
+        merge_base: true,
+    };
+
+    // Both hosts publish an open PR merged into its target as refs/pull/<n>/merge: the
+    // first parent is the target, the second the PR's head. Reading the PR from it needs
+    // nothing but git's own access to the remote — no `gh` or `az`.
+    let merge = local("merge");
+    let merge_ref = format!("+refs/pull/{}/merge:{merge}", pr.number);
+    let fetched = git(dir, &["fetch", "--quiet", "--no-tags", &remote, &merge_ref]).is_ok()
+        && git(dir, &["update-ref", &local("base"), &format!("{merge}^1")]).is_ok()
+        && git(dir, &["update-ref", &local("head"), &format!("{merge}^2")]).is_ok();
+    if fetched {
+        return Ok(spec);
+    }
+
+    // No merge ref (a conflicting or closed PR): ask the host for the branches.
+    let refs = lookup.refs(&pr)?;
     git(
         dir,
         &[
@@ -302,12 +322,15 @@ pub fn resolve(dir: &Path, target: &str, lookup: &dyn PrLookup) -> Result<RangeS
         ],
     )
     .with_context(|| format!("fetching PR {} from `{remote}`", pr.number))?;
+    Ok(spec)
+}
 
-    Ok(RangeSpec {
-        old: local("base"),
-        new: Side::Rev(local("head")),
-        merge_base: true,
-    })
+/// The PR number a `pr` target names, for labels: from a URL or a bare number.
+pub fn pr_number(target: &str) -> Option<u64> {
+    target
+        .parse()
+        .ok()
+        .or_else(|| parse_pr_url(target).map(|pr| pr.number))
 }
 
 /// Remotes whose configured URL is a GitHub or Azure DevOps repository. Reads the raw

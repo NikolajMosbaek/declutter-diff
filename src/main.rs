@@ -2,30 +2,36 @@ use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use anyhow::{Result, bail};
-use declutter::git::{RangeSpec, load, repo_root};
-use declutter::pr::{CliLookup, resolve};
+use declutter::git::{load, repo_root};
+use declutter::pr::CliLookup;
 use declutter::project::LayerMode;
 use declutter::review::{FileReview, Layers};
 use declutter::store::{NoteStore, ReviewStore};
+use declutter::target::{current_branch, default_branch, resolve_target};
 use declutter::{render, tui};
 
 const USAGE: &str = "\
 declutter — review a diff with comments and tests shown, hidden, or on their own
 
 USAGE:
-    declutter [OPTIONS] [REVISION | A..B | A...B]
-    declutter [OPTIONS] pr <URL | NUMBER>
+    declutter [OPTIONS]                   your uncommitted work: HEAD vs the working tree
+    declutter [OPTIONS] <PR URL>          a GitHub or Azure DevOps pull request
+    declutter [OPTIONS] pr <NUMBER>       a pull request in the repository origin points at
+    declutter [OPTIONS] <BRANCH>          a branch vs the main branch, from where it split off
+    declutter [OPTIONS] <A..B | A...B>    as in git diff
+    declutter [OPTIONS] <REVISION>        a revision vs the working tree
     declutter notes [--clear]
 
-    With no revision, compares HEAD against the working tree, untracked files included.
-    `pr` takes a GitHub or Azure DevOps pull-request URL, or a PR number in the repository
-    `origin` points at; it fetches the PR (no local branch is touched) and shows what the
-    PR page shows. Uses the `gh` or `az` CLI to look the PR up.
+    A pull request is fetched into refs/declutter/pr/<n>/ (no local branch is touched) and
+    shown as its PR page shows it; if the remote publishes no merge ref for it, the `gh` or
+    `az` CLI is asked for its branches. A branch that exists only on origin is fetched. The
+    main branch is what origin/HEAD points at (else main or master); --base overrides it.
     `notes` prints the review notes left with `m` as one prompt for a coding agent;
     `--clear` deletes them.
 
 OPTIONS:
     --staged             Compare against the index instead of the working tree
+    --base <BRANCH>      Compare a branch (or, alone, the current branch) against BRANCH
     --comments <MODE>    Start comments in MODE: hidden (default), only, shown
     --tests <MODE>       Start tests in MODE: shown (default), hidden, only
     --imports <MODE>     Start imports in MODE: shown (default), hidden, only
@@ -52,6 +58,7 @@ KEYS (viewer; press ? for the full list):
 
 struct Args {
     positionals: Vec<String>,
+    base: Option<String>,
     staged: bool,
     layers: Layers,
     print: bool,
@@ -61,6 +68,7 @@ struct Args {
 fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
     let mut args = Args {
         positionals: Vec::new(),
+        base: None,
         staged: false,
         layers: Layers::default(),
         print: false,
@@ -86,6 +94,12 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
             "--staged" | "--cached" => args.staged = true,
             "-p" | "--print" => args.print = true,
             "--clear" => args.clear = true,
+            "--base" => {
+                let Some(value) = inline.or_else(|| raw.next()) else {
+                    bail!("--base needs a branch");
+                };
+                args.base = Some(value);
+            }
             "--comments" | "--tests" | "--imports" | "--logging" | "--formatting" => {
                 let Some(value) = inline.or_else(|| raw.next()) else {
                     bail!("{flag} needs a value: hidden, only or shown");
@@ -133,19 +147,14 @@ fn run() -> Result<()> {
     if args.clear {
         bail!("--clear only applies to `declutter notes`");
     }
-    let spec = match args.positionals.as_slice() {
-        [pr, target] if pr == "pr" => {
-            if args.staged {
-                bail!("--staged cannot be combined with `pr`");
-            }
-            resolve(&dir, target, &CliLookup)?
-        }
-        [pr] if pr == "pr" => bail!("`pr` needs a pull-request URL or number"),
-        [] => RangeSpec::parse(None, args.staged)?,
-        [range] => RangeSpec::parse(Some(range), args.staged)?,
-        _ => bail!("only one revision or range can be given"),
-    };
-    let files: Vec<FileReview> = load(&dir, &spec)?
+    let target = resolve_target(
+        &dir,
+        &args.positionals,
+        args.staged,
+        args.base.as_deref(),
+        &CliLookup,
+    )?;
+    let files: Vec<FileReview> = load(&dir, &target.spec)?
         .into_iter()
         .map(FileReview::new)
         .collect();
@@ -155,7 +164,14 @@ fn run() -> Result<()> {
         return Ok(());
     }
     if files.is_empty() {
-        println!("No changes.");
+        println!("No changes in {}.", target.label);
+        if args.positionals.is_empty()
+            && let Some(branch) = current_branch(&dir)
+            && default_branch(&dir)
+                .is_some_and(|main| main.strip_prefix("origin/").unwrap_or(&main) != branch)
+        {
+            println!("To review what this branch adds to the main branch: declutter {branch}");
+        }
         return Ok(());
     }
     if !std::io::stdout().is_terminal() {
@@ -167,6 +183,7 @@ fn run() -> Result<()> {
         ReviewStore::open(&dir),
         NoteStore::open(&dir),
         repo_root(&dir)?,
+        target.label,
     )
 }
 

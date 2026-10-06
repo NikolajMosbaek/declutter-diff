@@ -21,5 +21,6 @@ pub mod project;
 pub mod render;
 pub mod review;
 pub mod store;
+pub mod target;
 pub mod test_files;
 pub mod tui;
