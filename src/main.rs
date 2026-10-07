@@ -41,6 +41,7 @@ OPTIONS:
     --logging <MODE>     Start logging statements in MODE: shown (default), hidden, only
     --formatting <MODE>  Start whitespace-only changes in MODE: shown (default), hidden, only
     -p, --print          Print the diff instead of opening the viewer
+    -n, --line-numbers   Print the diff with each row's old and new line numbers
     --no-syntax          Start with syntax colouring off (s toggles it)
     -h, --help           Show this help
     -V, --version        Show the version
@@ -68,6 +69,7 @@ struct Args {
     staged: bool,
     layers: Layers,
     print: bool,
+    line_numbers: bool,
     clear: bool,
     syntax: bool,
 }
@@ -79,6 +81,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
         staged: false,
         layers: Layers::default(),
         print: false,
+        line_numbers: false,
         clear: false,
         syntax: true,
     };
@@ -101,6 +104,10 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
             }
             "--staged" | "--cached" => args.staged = true,
             "-p" | "--print" => args.print = true,
+            "-n" | "--line-numbers" => {
+                args.print = true;
+                args.line_numbers = true;
+            }
             "--clear" => args.clear = true,
             "--no-syntax" => args.syntax = false,
             "--base" => {
@@ -169,7 +176,11 @@ fn run() -> Result<()> {
         .collect();
 
     if args.print {
-        print!("{}", render::plain(&files, args.layers));
+        if args.line_numbers {
+            print!("{}", render::plain_numbered(&files, args.layers));
+        } else {
+            print!("{}", render::plain(&files, args.layers));
+        }
         return Ok(());
     }
     if files.is_empty() {

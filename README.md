@@ -167,6 +167,7 @@ declutter HEAD~3                           # a revision vs the working tree
 declutter --staged                         # HEAD vs the index
 declutter --print                          # print instead of opening the viewer
 declutter -p --comments only               # print only the comment changes
+declutter -n                               # print with each row's old and new line numbers
 declutter --tests hidden                   # start with test files left out
 ```
 
@@ -274,6 +275,7 @@ What each test file covers:
 | `test_layer.rs` | Which files count as tests; hiding them or showing only them |
 | `import_logging.rs` | Finding imports and logging-only statements; layers combining, and *only* winning over *hidden* |
 | `formatting.rs` | Telling whitespace-only changes from real ones — including Python, where indentation is code |
+| `print.rs` | `--print` output, and line numbers that stay right with rows hidden |
 | `moves.rs` | Spotting moved blocks within and across files, and not mistaking short or trivial runs for moves |
 | `inline.rs`, `syntax.rs` | Word-level highlights, syntax colours, the palette and the `s` toggle |
 | `parsing.rs` | Swift the grammar can't parse being stood in for, and partial parses saying where they failed |

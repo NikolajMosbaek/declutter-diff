@@ -8,6 +8,17 @@ use crate::review::{Detection, DiffModes, FileReview, Layers, Summary};
 /// The decluttered diff as plain text. Line numbers in hunk headers refer to the
 /// original files, so the output is for reading, not for `git apply`.
 pub fn plain(files: &[FileReview], layers: Layers) -> String {
+    print(files, layers, false)
+}
+
+/// As [`plain`], with each row prefixed by its old and new line numbers. Hidden rows
+/// leave gaps in the numbering, so counting down from a hunk header would go wrong;
+/// these numbers are always right.
+pub fn plain_numbered(files: &[FileReview], layers: Layers) -> String {
+    print(files, layers, true)
+}
+
+fn print(files: &[FileReview], layers: Layers, numbered: bool) -> String {
     let mut out = String::new();
     let listed: Vec<&FileReview> = files
         .iter()
@@ -35,6 +46,16 @@ pub fn plain(files: &[FileReview], layers: Layers) -> String {
                     RowKind::Removed => '-',
                     RowKind::Added => '+',
                 };
+                if numbered {
+                    let number =
+                        |line: Option<usize>| line.map_or(String::new(), |n| n.to_string());
+                    let _ = write!(
+                        out,
+                        "{:>5} {:>5} ",
+                        number(row.old_line),
+                        number(row.new_line)
+                    );
+                }
                 let _ = writeln!(out, "{sign}{}", row.text);
             }
         }
