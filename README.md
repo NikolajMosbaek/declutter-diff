@@ -83,9 +83,30 @@ Each note lands on its line in the PR, posted under your own account:
 |---|---|---|
 | Open a PR | your normal git access to the repository | your normal git access to the repository |
 | Post your notes | the `gh` CLI, signed in (`gh auth login`) | the `az` CLI, signed in (`az login`) |
-| A note becomes | a review comment on the line (on the file, if the line is outside GitHub's diff) | a comment thread on the line |
+| A note becomes | one review, with each note a comment on its line (`P`'s note is the review's text) | a comment thread on the line (`P`'s note: a thread on the PR) |
 
 Nothing is posted unless you answer `y`; notes you don't post are kept for next time.
+
+### Notes from a coding agent
+
+An agent that reviews the PR can hand you its findings as notes, for you to read, edit
+or drop before anything is posted:
+
+```sh
+declutter notes add pr 42 --path src/cart.ts --line 13 --text "A 100% discount is allowed"
+declutter notes add pr 42 --json findings.json   # [{"path", "line", "side": "old", "text"}, …]
+declutter notes add pr 42 --text "Nothing tests the new branch"   # on the PR, not a line
+```
+
+A note has to sit on a line of the diff (the error says which lines are); `--json` adds
+all of its notes or, if any is refused, none. A second note on a line goes under the
+first. These notes are **drafts**: marked as such in the viewer and never posted until you
+open one with `m` (or `P`) and press Enter — edited or not. Emptying a note deletes it.
+
+Afterwards, `declutter notes pr 42 --json` shows what is still pending and what was posted,
+with a link to each comment, so the agent can see which findings you kept.
+`declutter notes post pr 42` posts without opening the viewer (`--yes` skips the question;
+drafts still stay).
 
 ## Layers
 
@@ -168,6 +189,9 @@ declutter --staged                         # HEAD vs the index
 declutter --print                          # print instead of opening the viewer
 declutter -p --comments only               # print only the comment changes
 declutter -n                               # print with each row's old and new line numbers
+declutter notes [<target>] [--json]        # the notes as a prompt (or JSON), of one review or all
+declutter notes add <target> …             # add draft notes, e.g. from a coding agent
+declutter notes post <target> [--yes]      # post a PR's notes without opening the viewer
 declutter --tests hidden                   # start with test files left out
 ```
 
@@ -198,7 +222,8 @@ Viewer keys:
 | `g` `G` | top / bottom of the diff (first / last file in the file list) |
 | `/` `n` `N` | search the diff; next / previous match (smart case) |
 | `r` | mark the file reviewed and jump to the next unreviewed one (again to unmark) |
-| `m` | leave a note on the line under the cursor |
+| `m` | leave a note on the line under the cursor, or open the draft there (`Alt+Enter`: new line) |
+| `P` | leave a note on the change as a whole |
 | `E` | copy all notes to the clipboard as one prompt for a coding agent |
 | `o` | open the file in `$VISUAL` / `$EDITOR` at the cursor's line |
 | `c` `t` `i` `l` `f` | hide / show comments, tests, imports, logging, formatting-only changes |
@@ -231,14 +256,16 @@ Notes belong to the review they were left in — a pull request, or a range such
 `origin/main...feature` — and only show up there. They are kept in
 `.git/declutter/notes.json`. `E` copies the review's notes as a prompt ("Please address
 these review comments… 1. `path:line`: note") and also saves it to
-`.git/declutter/review-notes.md`; `declutter notes` prints every note and
-`declutter notes --clear` deletes them.
+`.git/declutter/review-notes.md`; `declutter notes` prints every note (`declutter notes
+<target>` one review's) and `declutter notes --clear` deletes them.
 
 **Posting notes to the pull request.** When you quit a review of a PR, declutter lists the
 notes you left and asks `Post 3 comments to PR 42? [y/N]`. Only `y` posts: each note
-becomes a comment on its line (a thread in Azure DevOps via `az rest`, a review comment on
-GitHub via `gh api`, on the file when GitHub won't take that line), as whoever those CLIs
-are signed in as. Posted notes leave the local store; any that fail stay, with the error.
+becomes a comment on its line (a thread in Azure DevOps via `az rest`; on GitHub, one
+review via `gh api` — or, if GitHub refuses it, one comment per note, on the file when
+GitHub won't take that line), as whoever those CLIs are signed in as. Drafts you haven't
+opened are kept back. Posted notes move to `.git/declutter/posted.jsonl` with a link to
+where they landed; any that fail stay, with the error.
 
 `o` knows the line syntax of VS Code (and Cursor/Windsurf), Sublime, Zed, Helix, Vim/Neovim,
 nano, Emacs, micro, Xcode (`xed`) and JetBrains IDEs; terminal editors take over the screen
@@ -280,9 +307,10 @@ What each test file covers:
 | `inline.rs`, `syntax.rs` | Word-level highlights, syntax colours, the palette and the `s` toggle |
 | `parsing.rs` | Swift the grammar can't parse being stood in for, and partial parses saying where they failed |
 | `navigation.rs`, `tui.rs` | The keymap: changes and files, search, paging, `?`, `Esc`, `a`, keeping your place on layer toggles |
-| `review_marks.rs`, `notes.rs`, `editor.rs` | Review marks, notes and their prompt, opening the editor at the right line |
+| `review_marks.rs`, `notes.rs`, `editor.rs` | Review marks; notes, drafts and their prompt; the note editor; opening the editor at the right line |
+| `note_add.rs`, `note_post.rs` | Adding notes from the command line — only on lines of the diff, all or none — and posting them: drafts held back, one GitHub review, the posted log |
 | `git.rs`, `targets.rs` | What is compared: working tree, branches against main, ranges, untracked and deleted files, renames |
-| `pr.rs`, `upload.rs` | Opening PRs by URL or number, and posting notes — only on `y`, keeping the ones that fail |
+| `pr.rs`, `upload.rs` | Opening PRs by URL or number, and posting notes — only on `y`, never drafts, keeping the ones that fail |
 
 Most behaviours were checked the other way round too: break the code, see the test fail.
 

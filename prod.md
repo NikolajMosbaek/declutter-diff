@@ -136,6 +136,25 @@ changes, with correct line numbers, and toggling back restores the full diff.
 - Fewer partial Swift parses, and the line of the first error when one remains.
 - Open in editor at the cursor's line (`o`).
 - Go, Rust and Kotlin, with Rust's in-file `#[cfg(test)]` blocks as part of the tests layer.
+- `--print -n`: every row with its old and new line numbers, for agents citing `file:line`.
+- Notes from outside the viewer (`declutter notes add`), as drafts; a note on the change as
+  a whole (`P`); multi-line notes; posting without the viewer (`declutter notes post`); one
+  GitHub review instead of a comment per note; a log of what was posted, with links.
+
+### Decisions made while opening notes to coding agents
+
+- **A coding agent may write notes; only the reviewer posts them.** Notes added from the
+  command line are drafts, and drafts are never posted — not even with `--yes`. Opening a
+  draft (`m`, then Enter) is the act of making it the reviewer's. This keeps the non-goal
+  intact: declutter carries an agent's text, it never speaks for the reviewer.
+- **A note must be on a line of the diff.** The viewer only draws notes on diff rows, so a
+  note elsewhere could never be opened, and so never posted. Refusals name the lines that
+  are in the diff, so an agent can correct itself.
+- **No pick-list of notes to post.** Opening a draft accepts it and emptying a note deletes
+  it; a second mechanism for the same decision would only add keys.
+- **Existing PR threads are not drawn** (for now). Their anchors drift as the PR moves —
+  Azure DevOps anchors to an iteration, GitHub marks comments outdated — so markers would
+  land on the wrong lines. An agent can check the threads itself before adding notes.
 
 ## Roadmap
 
