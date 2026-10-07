@@ -23,8 +23,8 @@ number points at the real file, and the status line always says what is hidden.
 formatting layers and moved-code detection.
 
 ```sh
-cargo install declutter-diff
-declutter                    # the branch you're on, against main
+brew install nikolajmosbaek/tap/declutter     # or: cargo install declutter-diff
+declutter                                     # the branch you're on, against main
 ```
 
 ## What it looks like
@@ -133,8 +133,15 @@ for one are welcome.
 ## Install
 
 ```sh
-cargo install declutter-diff   # installs the `declutter` command
+brew install nikolajmosbaek/tap/declutter                  # macOS and Linux, with Homebrew
+curl -LsSf https://github.com/NikolajMosbaek/declutter-diff/releases/latest/download/declutter-diff-installer.sh | sh
+cargo binstall declutter-diff                              # a ready-made binary, with cargo-binstall
+cargo install declutter-diff                               # build it yourself (needs Rust)
 ```
+
+All four install the `declutter` command. Ready-made binaries are on the
+[releases page](https://github.com/NikolajMosbaek/declutter-diff/releases) for macOS (Apple
+silicon and Intel) and Linux (x86-64 and ARM).
 
 Or from a clone: `cargo build --release`, then use `target/release/declutter`. Needs Rust
 1.90 or newer. Reviewing pull requests uses git's own access to the remote; posting notes

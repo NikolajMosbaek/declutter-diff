@@ -1,6 +1,6 @@
 [package]
 name = "declutter-diff"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.90"
 description = "Review AI-generated diffs with comments, tests, imports, logging and formatting toggled in and out"
@@ -15,6 +15,12 @@ exclude = ["docs/", ".github/"]
 
 # The crate is published as `declutter-diff` (the name `declutter` is taken), but the
 # command and the library keep the short name.
+# Where cargo-binstall finds the ready-made binaries that each GitHub release carries.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.xz"
+bin-dir = "{ name }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "txz"
+
 [lib]
 name = "declutter"
 path = "src/lib.rs"
@@ -41,3 +47,8 @@ tree-sitter-typescript = "0.23.2"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
