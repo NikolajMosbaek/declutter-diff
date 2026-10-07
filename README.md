@@ -14,6 +14,8 @@ when you choose to.
 - **`t` `i` `l` `f`** — tests, imports, logging and whitespace-only changes, hidden or alone.
 - **`declutter <PR URL>`** — review a GitHub or Azure DevOps pull request, leave notes on
   lines, and post them as review comments when you quit.
+- **`declutter notes add`** — let a coding agent hand you its review findings as draft
+  notes; nothing is posted until you've opened each one.
 
 It parses the code with tree-sitter, so a `//` inside a string stays code, every line
 number points at the real file, and the status line always says what is hidden.
@@ -196,8 +198,9 @@ declutter --tests hidden                   # start with test files left out
 ```
 
 - **Pull requests** — paste the URL from the browser. The PR is fetched into
-  `refs/declutter/pr/<n>/` (no local branch is created or moved) and shown as the PR page
-  shows it. It is read from the merge ref both hosts publish, so all it needs is git's own
+  `refs/declutter/pr/<n>/` — `base` and `head`, plus `merge` when the host publishes one,
+  so `git rev-parse refs/declutter/pr/42/head` tells you which commit was reviewed; no
+  local branch is created or moved — and shown as the PR page shows it. It is read from the merge ref both hosts publish, so all it needs is git's own
   access to the remote; only when there is no merge ref (a conflicting or closed PR) does it
   ask the `gh` or `az` CLI for the branches.
 - **No arguments** — on a branch, everything it changes: its commits since it split off from
