@@ -69,7 +69,7 @@ Post 1 comment to PR 42? [y/N] y
 Posted 1 comment to PR 42.
 ```
 
-Each note lands on its line in the PR, as you:
+Each note lands on its line in the PR, posted under your own account:
 
 ![Opening a pull request by URL, leaving a note, and posting it when quitting](https://raw.githubusercontent.com/NikolajMosbaek/declutter-diff/main/docs/images/pr.gif)
 
