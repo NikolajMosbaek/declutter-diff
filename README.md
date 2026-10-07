@@ -208,7 +208,7 @@ file, which is the reviewed version unless you're reviewing an older range.
 ## Development
 
 ```sh
-cargo test                       # the whole suite, about a second once built
+cargo test                       # the whole suite (101 tests), under 10 seconds once built
 cargo test --test navigation     # one area (file names below)
 cargo test brackets              # tests whose name contains "brackets"
 cargo clippy --all-targets       # lint; kept at zero warnings
