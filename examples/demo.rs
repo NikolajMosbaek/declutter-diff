@@ -1,11 +1,16 @@
-//! Renders the README screenshots: `cargo run --example screenshots`.
+//! The demo change behind the README's pictures — an AI-style edit to a small cart
+//! module — and two ways to use it:
 //!
-//! Draws the viewer on a demo change — an AI-style edit to a small cart module — into
-//! an in-memory terminal and writes each frame as an SVG to `docs/images/`, so the
-//! pictures are reproducible and always match the current UI.
+//! - `cargo run --example demo` draws the viewer on it into an in-memory terminal and
+//!   writes each frame as an SVG to `docs/images/`, so the screenshots are reproducible
+//!   and always match the current UI;
+//! - `cargo run --example demo -- repo <dir>` creates a git repository at `<dir>` with
+//!   the change on a `feature/cart-discount` branch, for recording `docs/demo.tape`.
 
 use std::fmt::Write;
 use std::fs;
+use std::path::Path;
+use std::process::Command;
 
 use declutter::project::LayerMode;
 use declutter::review::{ChangeStatus, FileChange, FileReview, Layers};
@@ -118,6 +123,56 @@ fn press(app: &mut App, code: KeyCode) {
 }
 
 fn main() -> std::io::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.as_slice() {
+        [] => screenshots(),
+        [command, dir] if command == "repo" => repo(Path::new(dir)),
+        _ => {
+            eprintln!("usage: cargo run --example demo [-- repo <dir>]");
+            std::process::exit(2);
+        }
+    }
+}
+
+/// A repository whose `feature/cart-discount` branch holds the demo change on top of
+/// `main`, checked out.
+fn repo(dir: &Path) -> std::io::Result<()> {
+    if dir.exists() {
+        fs::remove_dir_all(dir)?;
+    }
+    fs::create_dir_all(dir.join("src"))?;
+    let git = |args: &[&str]| -> std::io::Result<()> {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "Demo")
+            .env("GIT_AUTHOR_EMAIL", "demo@example.com")
+            .env("GIT_COMMITTER_NAME", "Demo")
+            .env("GIT_COMMITTER_EMAIL", "demo@example.com")
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(format!("git {args:?} failed")))
+        }
+    };
+    git(&["init", "-q", "-b", "main"])?;
+    fs::write(dir.join("src/cart.ts"), OLD_CART)?;
+    fs::write(dir.join("src/format.ts"), OLD_FORMAT)?;
+    git(&["add", "."])?;
+    git(&["commit", "-q", "-m", "Add the cart"])?;
+    git(&["checkout", "-q", "-b", "feature/cart-discount"])?;
+    fs::write(dir.join("src/cart.ts"), NEW_CART)?;
+    fs::write(dir.join("src/cart.test.ts"), NEW_TEST)?;
+    fs::write(dir.join("src/format.ts"), NEW_FORMAT)?;
+    git(&["add", "."])?;
+    git(&["commit", "-q", "-m", "Support a discount on the cart total"])?;
+    println!("demo repository ready at {}", dir.display());
+    Ok(())
+}
+
+fn screenshots() -> std::io::Result<()> {
     fs::create_dir_all("docs/images")?;
 
     // Everything shown: what a plain diff looks like.

@@ -5,6 +5,8 @@ See [prod.md](prod.md) for the idea, the design and the roadmap.
 
 ## What it looks like
 
+![declutter reviewing a branch: comments toggled on, off and alone, a search, a review note, the formatting layer and the key help](docs/images/demo.gif)
+
 An AI-written change to a small cart module, everything shown — the way a plain diff
 reads:
 
@@ -23,8 +25,8 @@ Comments only (`C`) — check what the AI claims its code does, on its own:
 
 ![The key help over the viewer](docs/images/keys.svg)
 
-The pictures are drawn by the viewer itself: `cargo run --example screenshots` regenerates
-them in `docs/images/`.
+The pictures are drawn by the viewer itself: `cargo run --example demo` regenerates them in
+`docs/images/`, and `vhs docs/demo.tape` records the animation.
 
 ## Status
 
