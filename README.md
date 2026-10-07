@@ -18,9 +18,9 @@ when you choose to.
 It parses the code with tree-sitter, so a `//` inside a string stays code, every line
 number points at the real file, and the status line always says what is hidden.
 
-**Languages:** Swift, TypeScript/TSX, JavaScript, Python, Go, Rust and Kotlin. Any other
-file still gets the tests and formatting layers and moved-code detection, shown as a
-plain diff.
+**Languages:** Swift, TypeScript/TSX, JavaScript, Python, Go, Rust and Kotlin — see
+[Supported languages](#supported-languages). Any other file still gets the tests and
+formatting layers and moved-code detection.
 
 ```sh
 cargo install declutter-diff
@@ -109,6 +109,26 @@ Five layers, each shown, hidden or shown on its own:
 - **Formatting**: changes that only move whitespace — re-indenting, re-spacing, re-wrapping
   a statement over more or fewer lines, added blank lines. When hidden, the new layout stays
   visible as context. Indentation counts as code in Python and in files without a grammar.
+
+## Supported languages
+
+| Language | Files | Comments | Imports | Logging | Test files | Tests inside files | Colours |
+|---|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| Swift | `.swift` | ✓ | ✓ | ✓ | ✓ | | ✓ |
+| TypeScript | `.ts` `.mts` `.cts` `.tsx` | ✓ | ✓ | ✓ | ✓ | | ✓ |
+| JavaScript | `.js` `.mjs` `.cjs` `.jsx` | ✓ | ✓ | ✓ | ✓ | | ✓ |
+| Python | `.py` `.pyi` | ✓ docstrings too | ✓ | ✓ | ✓ | | ✓ |
+| Go | `.go` | ✓ | ✓ | ✓ | ✓ | | ✓ |
+| Rust | `.rs` | ✓ | ✓ | ✓ | ✓ | ✓ `#[cfg(test)]`, `#[test]` | ✓ |
+| Kotlin | `.kt` `.kts` | ✓ | ✓ | ✓ | ✓ | | ✓ |
+| Anything else | | | | | ✓ by path | | |
+
+Formatting-only changes and moved code are found in every file, whatever the language. In
+a file without a grammar, nothing else is hidden and indentation is treated as code.
+
+Adding a language takes its tree-sitter grammar and a few rules in `src/lang.rs` and
+`src/classify.rs`; [issues](https://github.com/NikolajMosbaek/declutter-diff/issues) asking
+for one are welcome.
 
 ## Install
 
