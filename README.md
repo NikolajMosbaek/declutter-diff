@@ -58,7 +58,7 @@ declutter --tests hidden                   # start with test files left out
   `--base` picks another. Naming the main branch itself, or any other revision, compares it
   with your working tree.
 
-The file list's title says what is being compared (`origin/main...feature/login`, `PR 115115`).
+The file list's title says what is being compared (`origin/main...feature/login`, `PR 42`).
 
 Viewer keys:
 
@@ -109,7 +109,7 @@ these review comments… 1. `path:line`: note") and also saves it to
 `declutter notes --clear` deletes them.
 
 **Posting notes to the pull request.** When you quit a review of a PR, declutter lists the
-notes you left and asks `Post 3 comments to PR 115115? [y/N]`. Only `y` posts: each note
+notes you left and asks `Post 3 comments to PR 42? [y/N]`. Only `y` posts: each note
 becomes a comment on its line (a thread in Azure DevOps via `az rest`, a review comment on
 GitHub via `gh api`, on the file when GitHub won't take that line), as whoever those CLIs
 are signed in as. Posted notes leave the local store; any that fail stay, with the error.

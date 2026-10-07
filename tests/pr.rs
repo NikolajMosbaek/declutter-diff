@@ -37,9 +37,9 @@ fn pull_request_urls_are_parsed() {
             42,
         ),
         (
-            "https://dev.azure.com/Contoso/Mobile%20Apps/_git/ios/pullrequest/115115",
+            "https://dev.azure.com/Contoso/Mobile%20Apps/_git/ios/pullrequest/1234",
             azure("Contoso", "Mobile Apps", "ios"),
-            115115,
+            1234,
         ),
         (
             "https://contoso.visualstudio.com/Mobile/_git/ios/pullrequest/7?_a=files",
