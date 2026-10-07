@@ -22,6 +22,6 @@ install-updater = false
 tap = "NikolajMosbaek/homebrew-tap"
 # The formula's name: `brew install nikolajmosbaek/tap/declutter`
 formula = "declutter"
-# Publishing the formula from CI needs a HOMEBREW_TAP_TOKEN secret with write access to
-# the tap; until it is set, the formula from each release is copied to the tap by hand.
-# publish-jobs = ["homebrew"]
+# Publish the formula to the tap from CI, with the HOMEBREW_TAP_TOKEN secret (a token with
+# write access to NikolajMosbaek/homebrew-tap only).
+publish-jobs = ["homebrew"]
