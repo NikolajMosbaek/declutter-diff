@@ -3,6 +3,29 @@
 Review AI-generated diffs with the comments and tests toggled out — or with nothing *but* them.
 See [prod.md](prod.md) for the idea, the design and the roadmap.
 
+## What it looks like
+
+An AI-written change to a small cart module, everything shown — the way a plain diff
+reads:
+
+![Everything shown: doc comments, line comments and a logging call surround the changed code](docs/images/everything.svg)
+
+The same change with comments and logging hidden (`c`, `l`): only the code is left, with a
+review note (`m`) on the line that needs a decision:
+
+![Comments and logging hidden: only the changed code is left, with one review note](docs/images/decluttered.svg)
+
+Comments only (`C`) — check what the AI claims its code does, on its own:
+
+![Comments only: the doc block and line comments the change added](docs/images/comments-only.svg)
+
+`?` lists every key:
+
+![The key help over the viewer](docs/images/keys.svg)
+
+The pictures are drawn by the viewer itself: `cargo run --example screenshots` regenerates
+them in `docs/images/`.
+
 ## Status
 
 Prototype: five layers, each shown, hidden or shown on its own.
