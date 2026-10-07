@@ -18,6 +18,7 @@ fn note(path: &str, side: NoteSide, line: usize, text: &str) -> Note {
         line,
         code: "let a = 2".into(),
         text: text.into(),
+        review: None,
     }
 }
 
@@ -108,12 +109,13 @@ fn m_notes_the_cursor_line_and_e_exports_every_note() {
 
     assert_eq!(
         app.notes.notes(),
-        [Note {
+        [&Note {
             path: "rate.ts".into(),
             side: NoteSide::New,
             line: 1,
             code: "const rate = 0.05;".into(),
             text: "use a fraction".into(),
+            review: None,
         }]
     );
     let mut terminal = Terminal::new(TestBackend::new(110, 14)).expect("terminal");

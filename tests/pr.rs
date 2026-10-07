@@ -153,7 +153,8 @@ fn a_pr_number_is_fetched_from_origin_and_compared_against_its_merge_base() {
         asked: RefCell::new(Vec::new()),
     };
 
-    let spec = resolve(clone.path(), "7", &stub).expect("resolve PR");
+    let (spec, pr) = resolve(clone.path(), "7", &stub).expect("resolve PR");
+    assert_eq!(pr.review_key(), "github.com/acme/shop PR 7");
 
     assert_eq!(
         stub.asked.borrow().as_slice(),

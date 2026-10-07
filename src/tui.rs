@@ -625,6 +625,7 @@ impl App {
             line: anchor.line,
             code: anchor.code,
             text,
+            review: None,
         };
         if let Err(error) = self.notes.set(note) {
             self.message = Some(format!("could not save the note: {error:#}"));
@@ -1211,7 +1212,7 @@ pub fn run(
     root: PathBuf,
     title: String,
     syntax: bool,
-) -> Result<()> {
+) -> Result<NoteStore> {
     let mut app = App::with_stores(files, layers, store, notes);
     app.root = root;
     app.title = title;
@@ -1230,7 +1231,8 @@ pub fn run(
             }
         }
         Ok(())
-    })
+    })?;
+    Ok(app.notes)
 }
 
 /// Opens `path` at `line` in `$VISUAL` / `$EDITOR`. A terminal editor takes over the

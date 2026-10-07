@@ -114,12 +114,19 @@ pub struct Note {
     /// The line the note is about, so the note still makes sense once lines move.
     pub code: String,
     pub text: String,
+    /// The review the note was left in — a pull request, or a range such as
+    /// `origin/main...feature` — so it only shows up, and is only posted, there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<String>,
 }
 
-/// Review notes, kept in `<git common dir>/declutter/notes.json` until cleared.
+/// Review notes, kept in `<git common dir>/declutter/notes.json` until cleared or
+/// posted. A store can be scoped to one review; it then reads and writes only that
+/// review's notes, and leaves the others alone.
 pub struct NoteStore {
     path: Option<PathBuf>,
     notes: Vec<Note>,
+    scope: Option<String>,
 }
 
 impl NoteStore {
@@ -138,6 +145,7 @@ impl NoteStore {
         NoteStore {
             path: Some(path),
             notes,
+            scope: None,
         }
     }
 
@@ -145,11 +153,25 @@ impl NoteStore {
         NoteStore {
             path: None,
             notes: Vec::new(),
+            scope: None,
         }
     }
 
-    pub fn notes(&self) -> &[Note] {
-        &self.notes
+    /// The same store, seeing only the notes of `review`.
+    pub fn scoped(mut self, review: impl Into<String>) -> NoteStore {
+        self.scope = Some(review.into());
+        self
+    }
+
+    fn in_scope(&self, note: &Note) -> bool {
+        self.scope.is_none() || note.review == self.scope
+    }
+
+    pub fn notes(&self) -> Vec<&Note> {
+        self.notes
+            .iter()
+            .filter(|note| self.in_scope(note))
+            .collect()
     }
 
     /// Where exported prompts are written, next to the notes themselves.
@@ -158,15 +180,20 @@ impl NoteStore {
     }
 
     pub fn find(&self, path: &str, side: NoteSide, line: usize) -> Option<&Note> {
-        self.notes
-            .iter()
-            .find(|note| note.path == path && note.side == side && note.line == line)
+        self.notes.iter().find(|note| {
+            self.in_scope(note) && note.path == path && note.side == side && note.line == line
+        })
     }
 
-    /// Adds or replaces the note on the same line; an empty text removes it.
-    pub fn set(&mut self, note: Note) -> Result<()> {
-        self.notes
-            .retain(|n| !(n.path == note.path && n.side == note.side && n.line == note.line));
+    /// Adds or replaces the note on the same line of this review; an empty text removes it.
+    pub fn set(&mut self, mut note: Note) -> Result<()> {
+        note.review = self.scope.clone();
+        self.notes.retain(|n| {
+            !(n.review == note.review
+                && n.path == note.path
+                && n.side == note.side
+                && n.line == note.line)
+        });
         if !note.text.trim().is_empty() {
             self.notes.push(note);
             self.notes
@@ -175,8 +202,17 @@ impl NoteStore {
         self.save()
     }
 
+    /// Deletes this review's notes (every note, when the store is not scoped).
     pub fn clear(&mut self) -> Result<()> {
-        self.notes.clear();
+        let scope = self.scope.clone();
+        self.notes
+            .retain(|note| scope.is_some() && note.review != scope);
+        self.save()
+    }
+
+    /// Deletes exactly these notes, as after posting them.
+    pub fn remove(&mut self, gone: &[Note]) -> Result<()> {
+        self.notes.retain(|note| !gone.contains(note));
         self.save()
     }
 
@@ -185,14 +221,11 @@ impl NoteStore {
         let mut out = String::from(
             "Please address these review comments. Line numbers refer to the version under review.\n",
         );
-        for (i, note) in self.notes.iter().enumerate() {
-            let place = match note.side {
-                NoteSide::New => format!("`{}:{}`", note.path, note.line),
-                NoteSide::Old => format!("`{}` (removed line {})", note.path, note.line),
-            };
+        for (i, note) in self.notes().into_iter().enumerate() {
             out.push_str(&format!(
-                "\n{}. {place}: {}\n   ```\n   {}\n   ```\n",
+                "\n{}. {}: {}\n   ```\n   {}\n   ```\n",
                 i + 1,
+                note.place(),
                 note.text.trim(),
                 note.code.trim()
             ));
@@ -205,6 +238,16 @@ impl NoteStore {
             return Ok(());
         };
         write_atomically(path, &serde_json::to_string_pretty(&self.notes)?)
+    }
+}
+
+impl Note {
+    /// "`Cart.swift:12`", or "`Cart.swift` (removed line 12)".
+    pub fn place(&self) -> String {
+        match self.side {
+            NoteSide::New => format!("`{}:{}`", self.path, self.line),
+            NoteSide::Old => format!("`{}` (removed line {})", self.path, self.line),
+        }
     }
 }
 

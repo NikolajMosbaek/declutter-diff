@@ -3,13 +3,25 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use crate::git::{RangeSpec, Side, git};
-use crate::pr::{PrLookup, parse_pr_url, pr_number, resolve};
+use crate::pr::{PrLookup, PullRequest, parse_pr_url, pr_number, resolve};
 
 /// What to review, and how to say it in the viewer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
     pub spec: RangeSpec,
     pub label: String,
+    /// The pull request, when the target is one.
+    pub pr: Option<PullRequest>,
+}
+
+impl Target {
+    /// Names this review, for scoping notes to it.
+    pub fn review_key(&self) -> String {
+        match &self.pr {
+            Some(pr) => pr.review_key(),
+            None => self.label.clone(),
+        }
+    }
 }
 
 /// Works out what the command-line arguments ask to review:
@@ -37,9 +49,11 @@ pub fn resolve_target(
             Some(number) => format!("PR {number}"),
             None => format!("PR {target}"),
         };
+        let (spec, pr) = resolve(dir, target, lookup)?;
         Ok(Target {
-            spec: resolve(dir, target, lookup)?,
+            spec,
             label,
+            pr: Some(pr),
         })
     };
     let worktree = if staged { "index" } else { "working tree" };
@@ -63,12 +77,14 @@ pub fn resolve_target(
                 None => Ok(Target {
                     spec: RangeSpec::parse(None, staged)?,
                     label: format!("HEAD → {worktree}"),
+                    pr: None,
                 }),
             }
         }
         [range] if range.contains("..") => Ok(Target {
             spec: RangeSpec::parse(Some(range), staged)?,
             label: range.clone(),
+            pr: None,
         }),
         [name] => match branch(dir, name)? {
             Some(branch) => {
@@ -82,6 +98,7 @@ pub fn resolve_target(
                     return Ok(Target {
                         spec: RangeSpec::parse(Some(name), staged)?,
                         label: format!("{name} → {worktree}"),
+                        pr: None,
                     });
                 }
                 branch_against(dir, &branch, &base, staged)
@@ -89,6 +106,7 @@ pub fn resolve_target(
             None => Ok(Target {
                 spec: RangeSpec::parse(Some(name), staged)?,
                 label: format!("{name} → {worktree}"),
+                pr: None,
             }),
         },
         _ => bail!("give one branch, revision, range or PR"),
@@ -118,6 +136,7 @@ fn current_branch_against(
             merge_base: true,
         },
         label: format!("{base}...{} + {uncommitted}", branch.unwrap_or("HEAD")),
+        pr: None,
     })
 }
 
@@ -135,6 +154,7 @@ fn branch_against(dir: &Path, branch: &str, base: &str, staged: bool) -> Result<
             merge_base: true,
         },
         label: format!("{base}...{branch}"),
+        pr: None,
     })
 }
 

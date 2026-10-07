@@ -101,10 +101,18 @@ Review marks are saved per repository in `.git/declutter/reviewed.tsv` (shared b
 worktrees, never committed). A mark belongs to the exact change, so a file you reviewed
 shows up unreviewed again as soon as a new commit touches it.
 
-Notes are kept in `.git/declutter/notes.json` until you clear them. `E` copies them as
-a prompt ("Please address these review comments… 1. `path:line`: note") and also saves it
-to `.git/declutter/review-notes.md`; `declutter notes` prints the same prompt and
-`declutter notes --clear` deletes the notes.
+Notes belong to the review they were left in — a pull request, or a range such as
+`origin/main...feature` — and only show up there. They are kept in
+`.git/declutter/notes.json`. `E` copies the review's notes as a prompt ("Please address
+these review comments… 1. `path:line`: note") and also saves it to
+`.git/declutter/review-notes.md`; `declutter notes` prints every note and
+`declutter notes --clear` deletes them.
+
+**Posting notes to the pull request.** When you quit a review of a PR, declutter lists the
+notes you left and asks `Post 3 comments to PR 115115? [y/N]`. Only `y` posts: each note
+becomes a comment on its line (a thread in Azure DevOps via `az rest`, a review comment on
+GitHub via `gh api`, on the file when GitHub won't take that line), as whoever those CLIs
+are signed in as. Posted notes leave the local store; any that fail stay, with the error.
 
 `o` knows the line syntax of VS Code (and Cursor/Windsurf), Sublime, Zed, Helix, Vim/Neovim,
 nano, Emacs, micro, Xcode (`xed`) and JetBrains IDEs; terminal editors take over the screen

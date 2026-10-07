@@ -43,7 +43,7 @@ impl Repo {
         }
     }
 
-    fn display(&self) -> String {
+    pub fn display(&self) -> String {
         match self {
             Repo::GitHub { owner, name } => format!("github.com/{owner}/{name}"),
             Repo::AzureDevOps { org, project, name } => {
@@ -57,6 +57,18 @@ impl Repo {
 pub struct PullRequest {
     pub repo: Repo,
     pub number: u64,
+}
+
+impl PullRequest {
+    /// Names the PR as a review, for scoping notes to it.
+    pub fn review_key(&self) -> String {
+        format!("{} PR {}", self.repo.display(), self.number)
+    }
+
+    /// Where its fetched head lives locally.
+    pub fn head_ref(&self) -> String {
+        format!("refs/declutter/pr/{}/head", self.number)
+    }
 }
 
 /// The refs to fetch for a pull request, as full ref names on the remote.
@@ -259,7 +271,11 @@ fn percent_decode(segment: &str) -> String {
 /// `refs/declutter/pr/<n>/` (so no local branch is touched) and compares the head
 /// against its merge base with the base, as the PR page does. The host's CLI is only
 /// asked when the remote publishes no merge ref for the PR.
-pub fn resolve(dir: &Path, target: &str, lookup: &dyn PrLookup) -> Result<RangeSpec> {
+pub fn resolve(
+    dir: &Path,
+    target: &str,
+    lookup: &dyn PrLookup,
+) -> Result<(RangeSpec, PullRequest)> {
     let remotes = remotes(dir)?;
     let pr = match target.parse::<u64>() {
         Ok(number) => {
@@ -305,7 +321,7 @@ pub fn resolve(dir: &Path, target: &str, lookup: &dyn PrLookup) -> Result<RangeS
         && git(dir, &["update-ref", &local("base"), &format!("{merge}^1")]).is_ok()
         && git(dir, &["update-ref", &local("head"), &format!("{merge}^2")]).is_ok();
     if fetched {
-        return Ok(spec);
+        return Ok((spec, pr));
     }
 
     // No merge ref (a conflicting or closed PR): ask the host for the branches.
@@ -322,7 +338,7 @@ pub fn resolve(dir: &Path, target: &str, lookup: &dyn PrLookup) -> Result<RangeS
         ],
     )
     .with_context(|| format!("fetching PR {} from `{remote}`", pr.number))?;
-    Ok(spec)
+    Ok((spec, pr))
 }
 
 /// The PR number a `pr` target names, for labels: from a URL or a bare number.

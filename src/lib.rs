@@ -25,3 +25,4 @@ pub mod store;
 pub mod target;
 pub mod test_files;
 pub mod tui;
+pub mod upload;

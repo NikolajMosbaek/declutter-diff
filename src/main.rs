@@ -8,6 +8,7 @@ use declutter::project::LayerMode;
 use declutter::review::{FileReview, Layers};
 use declutter::store::{NoteStore, ReviewStore};
 use declutter::target::resolve_target;
+use declutter::upload::{CliPoster, offer_upload};
 use declutter::{render, tui};
 
 const USAGE: &str = "\
@@ -28,7 +29,8 @@ USAGE:
     `az` CLI is asked for its branches. A branch that exists only on origin is fetched. The
     main branch is what origin/HEAD points at (else main or master); --base overrides it.
     `notes` prints the review notes left with `m` as one prompt for a coding agent;
-    `--clear` deletes them.
+    `--clear` deletes them. After reviewing a pull request, declutter lists the notes
+    you left and asks before posting them to the PR as line comments (via `az` / `gh`).
 
 OPTIONS:
     --staged             Compare against the index instead of the working tree
@@ -177,15 +179,29 @@ fn run() -> Result<()> {
     if !std::io::stdout().is_terminal() {
         bail!("stdout is not a terminal; use --print for text output");
     }
-    tui::run(
+    let notes = NoteStore::open(&dir).scoped(target.review_key());
+    let mut notes = tui::run(
         files,
         args.layers,
         ReviewStore::open(&dir),
-        NoteStore::open(&dir),
+        notes,
         repo_root(&dir)?,
-        target.label,
+        target.label.clone(),
         args.syntax,
-    )
+    )?;
+    if let Some(pr) = &target.pr
+        && std::io::stdin().is_terminal()
+    {
+        let poster = CliPoster { dir: dir.clone() };
+        offer_upload(
+            &mut notes,
+            pr,
+            &poster,
+            &mut std::io::stdin().lock(),
+            &mut std::io::stdout(),
+        )?;
+    }
+    Ok(())
 }
 
 fn main() -> ExitCode {
