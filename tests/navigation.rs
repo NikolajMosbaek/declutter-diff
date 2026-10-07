@@ -232,3 +232,57 @@ fn search_finds_matches_across_files_and_wraps() {
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.message.as_deref(), Some("no match for “missing”"));
 }
+
+#[test]
+fn a_turns_every_filter_off_and_back_on() {
+    use declutter::project::LayerMode;
+    let comments: String = (1..=6).map(|i| format!("// note {i}\n")).collect();
+    let old = format!("{comments}let a = 1\nlet b = 2\n");
+    let new = format!("{comments}let a = 10\nlet b = 20\n");
+    let files = vec![
+        change("Rates.swift", &old, &new),
+        change("Tests/RatesTests.swift", "let x = 1\n", "let x = 2\n"),
+    ];
+    let start = Layers {
+        tests: LayerMode::Hidden,
+        ..Layers::default()
+    };
+    let mut app = App::new(files, start);
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Down);
+    assert!(cursor_line(&mut app).contains("- let b = 2"));
+
+    press(&mut app, KeyCode::Char('a'));
+    let all_shown = Layers {
+        comments: LayerMode::Shown,
+        tests: LayerMode::Shown,
+        imports: LayerMode::Shown,
+        logging: LayerMode::Shown,
+        formatting: LayerMode::Shown,
+    };
+    assert_eq!(app.layers, all_shown);
+    assert!(
+        cursor_line(&mut app).contains("- let b = 2"),
+        "the cursor stays put"
+    );
+    assert_eq!(app.review_progress().1, 2, "the test file is listed again");
+
+    press(&mut app, KeyCode::Char('a'));
+    assert_eq!(app.layers, start);
+    assert!(cursor_line(&mut app).contains("- let b = 2"));
+
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Char('c'));
+    press(&mut app, KeyCode::Char('c'));
+    press(&mut app, KeyCode::Char('a'));
+    assert_eq!(app.layers, start, "brought back again");
+
+    let mut fresh = App::new(vec![two_hunks("A.swift")], all_shown);
+    press(&mut fresh, KeyCode::Char('a'));
+    assert_eq!(
+        fresh.layers.comments,
+        LayerMode::Hidden,
+        "nothing to bring back: hide every layer"
+    );
+    assert_eq!(fresh.layers.formatting, LayerMode::Hidden);
+}

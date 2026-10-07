@@ -77,6 +77,7 @@ Viewer keys:
 | `o` | open the file in `$VISUAL` / `$EDITOR` at the cursor's line |
 | `c` `t` `i` `l` `f` | hide / show comments, tests, imports, logging, formatting-only changes |
 | `C` `T` `I` `L` `F` | show only that layer; press again to go back |
+| `a` | all filters off (everything shown); press again to put them back |
 | `M` | collapse moved blocks to their one-line marker, or expand them |
 | `s` | syntax colouring on / off (`--no-syntax` starts with it off) |
 | `?` | every key |

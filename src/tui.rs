@@ -23,7 +23,7 @@ use crate::review::{ChangeStatus, Detection, FileReview, Layers, Summary};
 use crate::store::{Note, NoteSide, NoteStore, ReviewStore};
 
 /// Key help, most-used first: a narrow terminal cuts the end off. `?` shows them all.
-const HELP: &str = " ↑↓ move  ←→ pane  ]/[ change  }/{ file  / search  r reviewed  m note  c t i l f layers  ? help  q quit";
+const HELP: &str = " ↑↓ move  ←→ pane  ]/[ change  }/{ file  / search  r reviewed  m note  c t i l f layers  a all  ? help  q quit";
 
 /// A titled group of (keys, action) pairs on the `?` screen.
 type KeyGroup = (&'static str, &'static [(&'static str, &'static str)]);
@@ -71,6 +71,7 @@ const KEYS: [&[KeyGroup]; 2] = [
                 ("i  I", "imports"),
                 ("l  L", "logging"),
                 ("f  F", "formatting-only changes"),
+                ("a", "all filters off / back on"),
                 ("M", "collapse moved blocks"),
                 ("s", "syntax colouring on / off"),
             ],
@@ -160,6 +161,8 @@ pub struct App {
     pub collapse_moves: bool,
     /// What each layer was before it was switched to *only*, to switch back to.
     before_only: HashMap<Layer, LayerMode>,
+    /// The layers as they were when `a` showed everything, for `a` to bring back.
+    saved_layers: Option<Layers>,
     /// The working tree's top-level directory; changed paths are relative to it.
     pub root: PathBuf,
     /// A file and line to open in the editor, for the run loop to carry out.
@@ -208,6 +211,7 @@ impl App {
             moves: Moves::new(),
             collapse_moves: false,
             before_only: HashMap::new(),
+            saved_layers: None,
             root: PathBuf::from("."),
             open_request: None,
             title: String::new(),
@@ -338,6 +342,7 @@ impl App {
             KeyCode::Char('f') => self.toggle_hidden(Layer::Formatting),
             KeyCode::Char('F') => self.toggle_only(Layer::Formatting),
             KeyCode::Char('s') => self.syntax = !self.syntax,
+            KeyCode::Char('a') => self.toggle_all(),
             KeyCode::Char('M') => {
                 let place = self.place();
                 self.collapse_moves = !self.collapse_moves;
@@ -407,6 +412,35 @@ impl App {
         };
         *self.layer_mut(layer) = next;
         self.layers_changed(layer, before);
+    }
+
+    /// `a`: with any layer filtering, shows everything and remembers how it was; pressed
+    /// again, puts it back. With nothing to put back, hides every layer.
+    fn toggle_all(&mut self) {
+        let before = self.where_am_i();
+        let all = |mode| Layers {
+            comments: mode,
+            tests: mode,
+            imports: mode,
+            logging: mode,
+            formatting: mode,
+        };
+        let (next, message) = if self.layers != all(LayerMode::Shown) {
+            self.saved_layers = Some(self.layers);
+            (
+                all(LayerMode::Shown),
+                "all layers shown · a puts the filters back",
+            )
+        } else {
+            match self.saved_layers.take() {
+                Some(saved) => (saved, "filters back on"),
+                None => (all(LayerMode::Hidden), "every layer hidden"),
+            }
+        };
+        self.layers = next;
+        self.before_only.clear();
+        self.layers_changed(Layer::Tests, before);
+        self.message = Some(message.to_string());
     }
 
     /// The selected file and the cursor's place in it, taken before a layer changes.

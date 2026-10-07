@@ -54,6 +54,7 @@ KEYS (viewer; press ? for the full list):
     m  E  o     note a line; copy all notes as a prompt; open in $EDITOR
     c t i l f   hide / show comments, tests, imports, logging, formatting
     C T I L F   show only that layer (again to go back)
+    a           all filters off, and back on
     M           collapse moved blocks
     s           syntax colouring on / off
     q           quit
