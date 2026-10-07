@@ -3,6 +3,7 @@ name = "declutter"
 version = "0.1.0"
 edition = "2024"
 description = "Review AI-generated diffs with comments toggled in and out"
+license = "MIT"
 
 [dependencies]
 anyhow = "1.0.104"

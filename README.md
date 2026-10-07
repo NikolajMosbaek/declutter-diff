@@ -149,3 +149,7 @@ file, which is the reviewed version unless you're reviewing an older range.
 ```sh
 cargo test
 ```
+
+## License
+
+[MIT](LICENSE)
