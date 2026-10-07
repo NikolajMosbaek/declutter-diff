@@ -326,6 +326,11 @@ fn github_gets_one_review_with_the_line_notes_as_its_comments() {
     ];
 
     let (args, body) = github_review(&github_pr(), &notes, "abc123");
+    let (_, without) = github_review(&github_pr(), &notes[1..], "abc123");
+    assert_eq!(
+        without["body"], "",
+        "a review without a note on the whole change"
+    );
 
     assert_eq!(
         args,

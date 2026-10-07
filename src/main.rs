@@ -316,6 +316,8 @@ fn list_notes(dir: &Path, positionals: &[String], args: &Args) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&listing)?);
     } else if notes.notes().is_empty() {
         println!("No review notes. Press m on a diff line in the viewer to add one.");
+    } else if notes.notes().iter().all(|note| note.draft) {
+        println!("Only draft notes so far; open them with m in the viewer to include them.");
     } else {
         print!("{}", notes.prompt());
     }

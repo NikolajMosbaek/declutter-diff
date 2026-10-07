@@ -219,19 +219,24 @@ fn adding_to_a_noted_line_appends_and_makes_it_a_draft_again() {
 }
 
 #[test]
-fn a_pull_request_note_has_no_line_and_comes_first_in_the_prompt() {
+fn the_prompt_starts_with_the_note_on_the_whole_change_and_leaves_out_drafts() {
     let mut store = NoteStore::in_memory();
     store
         .set(note("a.swift", NoteSide::New, 3, "use a constant"))
         .expect("save");
+    store.add(draft("b.swift", 1, "unread")).expect("add");
     store
         .add(Note::on_pull_request(
             "Nothing tests the new branch.\nAdd a case for it.",
         ))
         .expect("add");
-
     let general = store.general().expect("the PR note");
     assert!(general.is_general() && general.draft);
+    let opened = Note {
+        draft: false,
+        ..general.clone()
+    };
+    store.set(opened).expect("open it");
     assert_eq!(
         store.prompt(),
         "Please address these review comments. Line numbers refer to the version under review.\n\

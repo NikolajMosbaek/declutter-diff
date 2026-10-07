@@ -700,9 +700,14 @@ impl App {
 
     /// Copies all notes as one prompt to the clipboard and saves it next to the notes.
     fn export_notes(&mut self) {
-        let count = self.notes.notes().len();
+        let all = self.notes.notes();
+        let count = all.iter().filter(|note| !note.draft).count();
         if count == 0 {
-            self.message = Some("no notes yet: press m on a diff line to add one".to_string());
+            self.message = Some(if all.is_empty() {
+                "no notes yet: press m on a diff line to add one".to_string()
+            } else {
+                "only drafts so far: open one with m to include it".to_string()
+            });
             return;
         }
         let prompt = self.notes.prompt();

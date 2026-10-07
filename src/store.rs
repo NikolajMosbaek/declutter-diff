@@ -340,12 +340,14 @@ impl NoteStore {
         self.save()
     }
 
-    /// The notes as one prompt to hand to a coding agent.
+    /// The notes as one prompt to hand to a coding agent. Drafts are left out: nobody
+    /// has read them, so they are no one's review comments yet.
     pub fn prompt(&self) -> String {
         let mut out = String::from(
             "Please address these review comments. Line numbers refer to the version under review.\n",
         );
-        for (i, note) in self.notes().into_iter().enumerate() {
+        let opened = self.notes().into_iter().filter(|note| !note.draft);
+        for (i, note) in opened.enumerate() {
             let text = note.text.trim().replace('\n', "\n   ");
             if note.is_general() {
                 out.push_str(&format!("\n{}. On the change as a whole: {text}\n", i + 1));

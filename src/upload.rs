@@ -257,9 +257,8 @@ pub fn github_review(pr: &PullRequest, notes: &[Note], head: &str) -> (Vec<Strin
         .filter(|note| note.is_general())
         .map(|note| note.text.trim())
         .collect();
-    if !general.is_empty() {
-        body["body"] = json!(general.join("\n\n"));
-    }
+    // GitHub wants a body with a COMMENT review, even an empty one.
+    body["body"] = json!(general.join("\n\n"));
     body["comments"] = notes
         .iter()
         .filter(|note| !note.is_general())

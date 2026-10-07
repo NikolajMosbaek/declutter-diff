@@ -222,7 +222,7 @@ Viewer keys:
 | `g` `G` | top / bottom of the diff (first / last file in the file list) |
 | `/` `n` `N` | search the diff; next / previous match (smart case) |
 | `r` | mark the file reviewed and jump to the next unreviewed one (again to unmark) |
-| `m` | leave a note on the line under the cursor, or open the draft there (`Alt+Enter`: new line) |
+| `m` | leave a note on the line under the cursor, or open the draft there (`Alt+Enter`: new line — on macOS, with the terminal's "Use Option as Meta" on) |
 | `P` | leave a note on the change as a whole |
 | `E` | copy all notes to the clipboard as one prompt for a coding agent |
 | `o` | open the file in `$VISUAL` / `$EDITOR` at the cursor's line |
@@ -254,7 +254,7 @@ shows up unreviewed again as soon as a new commit touches it.
 
 Notes belong to the review they were left in — a pull request, or a range such as
 `origin/main...feature` — and only show up there. They are kept in
-`.git/declutter/notes.json`. `E` copies the review's notes as a prompt ("Please address
+`.git/declutter/notes.json`. `E` copies the review's notes (drafts left out) as a prompt ("Please address
 these review comments… 1. `path:line`: note") and also saves it to
 `.git/declutter/review-notes.md`; `declutter notes` prints every note (`declutter notes
 <target>` one review's) and `declutter notes --clear` deletes them.
