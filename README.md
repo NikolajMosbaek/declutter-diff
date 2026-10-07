@@ -1,36 +1,56 @@
-# declutter-diff
+# declutter
 
-Review AI-generated diffs with the comments and tests toggled out — or with nothing *but* them.
-See [prod.md](prod.md) for the idea, the design and the roadmap.
+**Read the code, not the commentary.**
+
+AI agents write diffs where the logic hides under doc blocks that repeat the function name,
+a comment above every line, a log call in every branch, tests twice the size of the change
+and a formatter's worth of whitespace. `declutter` is a terminal diff viewer that peels
+those layers off, one key each, so you review what the code *does* first — and the rest
+when you choose to.
+
+- **`c`** — comments gone, even the ones trailing a line of code, along with the blank
+  lines they brought.
+- **`C`** — *only* the comments: check what the AI claims against what it wrote.
+- **`t` `i` `l` `f`** — tests, imports, logging and whitespace-only changes, hidden or alone.
+- **`declutter <PR URL>`** — review a GitHub or Azure DevOps pull request, leave notes on
+  lines, and post them as review comments when you quit.
+
+It parses the code with tree-sitter, so a `//` inside a string stays code, every line
+number points at the real file, and the status line always says what is hidden.
+
+```sh
+cargo install declutter-diff
+declutter                    # the branch you're on, against main
+```
 
 ## What it looks like
 
-![declutter reviewing a branch: comments toggled on, off and alone, a search, a review note, the formatting layer and the key help](docs/images/demo.gif)
+![declutter reviewing a branch: comments toggled on, off and alone, a search, a review note, the formatting layer and the key help](https://raw.githubusercontent.com/NikolajMosbaek/declutter-diff/main/docs/images/demo.gif)
 
 An AI-written change to a small cart module, everything shown — the way a plain diff
 reads:
 
-![Everything shown: doc comments, line comments and a logging call surround the changed code](docs/images/everything.svg)
+![Everything shown: doc comments, line comments and a logging call surround the changed code](https://raw.githubusercontent.com/NikolajMosbaek/declutter-diff/main/docs/images/everything.svg)
 
 The same change with comments and logging hidden (`c`, `l`): only the code is left, with a
 review note (`m`) on the line that needs a decision:
 
-![Comments and logging hidden: only the changed code is left, with one review note](docs/images/decluttered.svg)
+![Comments and logging hidden: only the changed code is left, with one review note](https://raw.githubusercontent.com/NikolajMosbaek/declutter-diff/main/docs/images/decluttered.svg)
 
 Comments only (`C`) — check what the AI claims its code does, on its own:
 
-![Comments only: the doc block and line comments the change added](docs/images/comments-only.svg)
+![Comments only: the doc block and line comments the change added](https://raw.githubusercontent.com/NikolajMosbaek/declutter-diff/main/docs/images/comments-only.svg)
 
 `?` lists every key:
 
-![The key help over the viewer](docs/images/keys.svg)
+![The key help over the viewer](https://raw.githubusercontent.com/NikolajMosbaek/declutter-diff/main/docs/images/keys.svg)
 
 The pictures are drawn by the viewer itself: `cargo run --example demo` regenerates them in
 `docs/images/`, and `vhs docs/demo.tape` records the animation.
 
-## Status
+## Layers
 
-Prototype: five layers, each shown, hidden or shown on its own.
+Five layers, each shown, hidden or shown on its own:
 
 - **Comments** (and Python docstrings) in Swift, TypeScript/TSX, JavaScript and Python.
 - **Tests**, per file: test directories and file-name conventions in any language
@@ -43,12 +63,18 @@ Prototype: five layers, each shown, hidden or shown on its own.
   a statement over more or fewer lines, added blank lines. When hidden, the new layout stays
   visible as context. Indentation counts as code in Python and in files without a grammar.
 
-## Build
+## Install
 
 ```sh
-cargo build --release
-# binary: target/release/declutter
+cargo install declutter-diff   # installs the `declutter` command
 ```
+
+Or from a clone: `cargo build --release`, then use `target/release/declutter`. Needs Rust
+1.90 or newer. Reviewing pull requests uses git's own access to the remote; posting notes
+uses the `az` (Azure DevOps) or `gh` (GitHub) CLI.
+
+The design, the decisions behind it and the roadmap are in
+[prod.md](https://github.com/NikolajMosbaek/declutter-diff/blob/main/prod.md).
 
 ## Use
 

@@ -1,9 +1,27 @@
 [package]
-name = "declutter"
+name = "declutter-diff"
 version = "0.1.0"
 edition = "2024"
-description = "Review AI-generated diffs with comments toggled in and out"
+rust-version = "1.90"
+description = "Review AI-generated diffs with comments, tests, imports, logging and formatting toggled in and out"
 license = "MIT"
+repository = "https://github.com/NikolajMosbaek/declutter-diff"
+homepage = "https://github.com/NikolajMosbaek/declutter-diff"
+readme = "README.md"
+keywords = ["diff", "code-review", "tree-sitter", "tui", "git"]
+categories = ["command-line-utilities", "development-tools"]
+# The pictures live on GitHub; the README points there, so the package stays small.
+exclude = ["docs/", ".github/"]
+
+# The crate is published as `declutter-diff` (the name `declutter` is taken), but the
+# command and the library keep the short name.
+[lib]
+name = "declutter"
+path = "src/lib.rs"
+
+[[bin]]
+name = "declutter"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.104"
