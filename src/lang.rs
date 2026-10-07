@@ -12,6 +12,9 @@ pub enum Lang {
     /// Parsed with the TSX grammar, which accepts plain JavaScript and JSX.
     JavaScript,
     Python,
+    Go,
+    Rust,
+    Kotlin,
 }
 
 impl Lang {
@@ -23,6 +26,9 @@ impl Lang {
             "tsx" => Some(Lang::Tsx),
             "js" | "mjs" | "cjs" | "jsx" => Some(Lang::JavaScript),
             "py" | "pyi" => Some(Lang::Python),
+            "go" => Some(Lang::Go),
+            "rs" => Some(Lang::Rust),
+            "kt" | "kts" => Some(Lang::Kotlin),
             _ => None,
         }
     }
@@ -34,6 +40,9 @@ impl Lang {
             Lang::Tsx => "TSX",
             Lang::JavaScript => "JavaScript",
             Lang::Python => "Python",
+            Lang::Go => "Go",
+            Lang::Rust => "Rust",
+            Lang::Kotlin => "Kotlin",
         }
     }
 
@@ -43,6 +52,9 @@ impl Lang {
             Lang::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             Lang::Tsx | Lang::JavaScript => tree_sitter_typescript::LANGUAGE_TSX.into(),
             Lang::Python => tree_sitter_python::LANGUAGE.into(),
+            Lang::Go => tree_sitter_go::LANGUAGE.into(),
+            Lang::Rust => tree_sitter_rust::LANGUAGE.into(),
+            Lang::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
         }
     }
 
@@ -52,7 +64,8 @@ impl Lang {
             Lang::TypeScript | Lang::Tsx | Lang::JavaScript => {
                 matches!(kind, "comment" | "html_comment")
             }
-            Lang::Python => kind == "comment",
+            Lang::Python | Lang::Go => kind == "comment",
+            Lang::Rust | Lang::Kotlin => matches!(kind, "line_comment" | "block_comment"),
         }
     }
 }

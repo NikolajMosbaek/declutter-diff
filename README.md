@@ -18,6 +18,10 @@ when you choose to.
 It parses the code with tree-sitter, so a `//` inside a string stays code, every line
 number points at the real file, and the status line always says what is hidden.
 
+**Languages:** Swift, TypeScript/TSX, JavaScript, Python, Go, Rust and Kotlin. Any other
+file still gets the tests and formatting layers and moved-code detection, shown as a
+plain diff.
+
 ```sh
 cargo install declutter-diff
 declutter                    # the branch you're on, against main
@@ -87,13 +91,21 @@ Nothing is posted unless you answer `y`; notes you don't post are kept for next 
 
 Five layers, each shown, hidden or shown on its own:
 
-- **Comments** (and Python docstrings) in Swift, TypeScript/TSX, JavaScript and Python.
-- **Tests**, per file: test directories and file-name conventions in any language
-  (`Tests/`, `FooTests/`, `__tests__/`, `FooTests.swift`, `foo.test.ts`, `test_foo.py`, …),
-  plus Swift, Python and TypeScript files that import a test framework.
-- **Imports**: `import` statements (and `export … from` re-exports).
-- **Logging**: statements that only log — `print(…)`, `NSLog`, `os_log`, `console.*(…)`, and
-  `debug/info/warn/error/…` calls on a `logger`, `log`, `logging` or `console` receiver.
+- **Comments**: line and block comments and doc comments (Python docstrings, Rust `///`,
+  KDoc, Go doc comments) in every supported language.
+- **Tests**: whole test files, by the usual conventions in any language — `Tests/`,
+  `FooTests/`, `__tests__/`, `src/test/`, `FooTests.swift`, `FooTest.kt`, `foo.test.ts`,
+  `test_foo.py`, `foo_test.go` — or by importing a test framework (XCTest, Testing, Quick,
+  pytest, unittest, vitest, jest, JUnit, kotlin.test, Kotest). Inside Rust source files,
+  `#[cfg(test)]` modules and `#[test]` functions are test blocks of their own: hiding tests
+  cuts them out, *only* tests keeps just them.
+- **Imports**: `import` statements and `export … from` re-exports, Go `import` blocks,
+  Rust `use` and `extern crate`, Kotlin `import`.
+- **Logging**: statements that only log — `print`, `NSLog`, `os_log`, `console.*`, Go's
+  `fmt.Print*`/`log.Print*`/`slog`, Rust's `println!`/`dbg!`/`log`/`tracing` macros,
+  Kotlin's `println`, Android `Log.*` and `Timber` — and `debug/info/warn/error/…` calls on
+  any `logger`. Calls that do more than log stay code: `fmt.Fprintf` (it may write a
+  response) and `log.Fatal` (it ends the program).
 - **Formatting**: changes that only move whitespace — re-indenting, re-spacing, re-wrapping
   a statement over more or fewer lines, added blank lines. When hidden, the new layout stays
   visible as context. Indentation counts as code in Python and in files without a grammar.
@@ -208,7 +220,7 @@ file, which is the reviewed version unless you're reviewing an older range.
 ## Development
 
 ```sh
-cargo test                       # the whole suite (101 tests), under 10 seconds once built
+cargo test                       # the whole suite (113 tests), under 10 seconds once built
 cargo test --test navigation     # one area (file names below)
 cargo test brackets              # tests whose name contains "brackets"
 cargo clippy --all-targets       # lint; kept at zero warnings
@@ -231,6 +243,7 @@ What each test file covers:
 | File | What it pins down |
 |---|---|
 | `comments.rs` | Finding comments and docstrings in each language; hiding them without leaving gaps or false changes; line numbers staying true |
+| `languages.rs` | Go, Rust and Kotlin: comments, imports, logging (and what is *not* logging), Rust test blocks, test files, colours |
 | `test_layer.rs` | Which files count as tests; hiding them or showing only them |
 | `import_logging.rs` | Finding imports and logging-only statements; layers combining, and *only* winning over *hidden* |
 | `formatting.rs` | Telling whitespace-only changes from real ones — including Python, where indentation is code |

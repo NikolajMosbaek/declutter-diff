@@ -45,7 +45,6 @@ fn test_paths_are_recognised_across_languages() {
         "Tests/CartTests/CartTests.swift",
         "App/AppTests/LoginTests.swift",
         "App/AppTests/Helpers/Fixtures.swift",
-        "Sources/Cart/CartSpec.swift",
         "web/src/cart.test.ts",
         "web/src/Cart.spec.tsx",
         "web/src/__tests__/cart.ts",
@@ -64,6 +63,8 @@ fn test_paths_are_recognised_across_languages() {
         "web/src/attestation.ts",
         "pkg/testimonials.py",
         "Test.swift",
+        "Sources/Cart/CartSpec.swift",
+        "src/main/kotlin/PropertySpec.kt",
     ];
 
     for path in tests {
@@ -81,6 +82,10 @@ fn files_outside_test_directories_count_as_tests_when_they_import_a_test_framewo
         "import Foundation\n@testable import Cart\n"
     ));
     assert!(is_test_file("Sources/Harness.swift", "import Testing\n"));
+    assert!(is_test_file(
+        "Sources/CartSpec.swift",
+        "import Quick\nimport Nimble\n"
+    ));
     assert!(is_test_file("pkg/checks.py", "import pytest\n"));
     assert!(is_test_file(
         "web/src/checks.ts",
@@ -105,7 +110,7 @@ fn hiding_tests_leaves_test_files_out_and_says_how_many() {
     assert_eq!((summary.files, summary.filtered_files), (1, 2));
     assert_eq!(
         summary.status_line(layers),
-        "comments: hidden · tests: hidden · showing 1 of 1 hunks · 0 comment-only hunks hidden · 2 test files hidden"
+        "comments: hidden · tests: hidden · showing 1 of 1 hunks · 0 comment/test-only hunks hidden · 2 test files hidden"
     );
 
     let text = plain(&files, layers);

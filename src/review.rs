@@ -75,10 +75,18 @@ pub enum SpanLayer {
     Comments,
     Imports,
     Logging,
+    /// Test code inside a source file (Rust's `#[cfg(test)]` modules); whole test files
+    /// are the file-level side of the same layer.
+    Tests,
 }
 
 impl SpanLayer {
-    pub const ALL: [SpanLayer; 3] = [SpanLayer::Comments, SpanLayer::Imports, SpanLayer::Logging];
+    pub const ALL: [SpanLayer; 4] = [
+        SpanLayer::Comments,
+        SpanLayer::Imports,
+        SpanLayer::Logging,
+        SpanLayer::Tests,
+    ];
 
     /// The adjective used in messages: "comment-only hunks".
     pub fn adjective(self) -> &'static str {
@@ -86,6 +94,7 @@ impl SpanLayer {
             SpanLayer::Comments => "comment",
             SpanLayer::Imports => "import",
             SpanLayer::Logging => "logging",
+            SpanLayer::Tests => "test",
         }
     }
 
@@ -94,6 +103,7 @@ impl SpanLayer {
             SpanLayer::Comments => &classified.comments,
             SpanLayer::Imports => &classified.imports,
             SpanLayer::Logging => &classified.logging,
+            SpanLayer::Tests => &classified.tests,
         }
     }
 }
@@ -106,6 +116,7 @@ pub struct DiffModes {
     pub imports: LayerMode,
     pub logging: LayerMode,
     pub formatting: LayerMode,
+    pub tests: LayerMode,
 }
 
 impl DiffModes {
@@ -114,6 +125,7 @@ impl DiffModes {
         imports: LayerMode::Shown,
         logging: LayerMode::Shown,
         formatting: LayerMode::Shown,
+        tests: LayerMode::Shown,
     };
 
     pub fn mode(self, layer: SpanLayer) -> LayerMode {
@@ -121,6 +133,7 @@ impl DiffModes {
             SpanLayer::Comments => self.comments,
             SpanLayer::Imports => self.imports,
             SpanLayer::Logging => self.logging,
+            SpanLayer::Tests => self.tests,
         }
     }
 
@@ -180,6 +193,7 @@ impl From<Layers> for DiffModes {
             imports: layers.imports,
             logging: layers.logging,
             formatting: layers.formatting,
+            tests: layers.tests,
         }
     }
 }
@@ -276,6 +290,16 @@ impl FileReview {
     }
 
     fn hunks_for(&self, modes: DiffModes) -> Vec<Hunk> {
+        // A test file is test code from top to bottom: the test layer decides whether it
+        // is listed at all, never which of its lines are shown.
+        let modes = if self.is_test {
+            DiffModes {
+                tests: LayerMode::Shown,
+                ..modes
+            }
+        } else {
+            modes
+        };
         let (mode, layers) = modes.effective();
         let lang = match self.detection {
             Detection::Parsed(lang) | Detection::Partial(lang, _) => Some(lang),
@@ -296,7 +320,15 @@ impl FileReview {
         // Indentation is syntax in Python, and in files without a grammar it may be too.
         let indentation_matters = !matches!(
             lang,
-            Some(Lang::Swift | Lang::TypeScript | Lang::Tsx | Lang::JavaScript)
+            Some(
+                Lang::Swift
+                    | Lang::TypeScript
+                    | Lang::Tsx
+                    | Lang::JavaScript
+                    | Lang::Go
+                    | Lang::Rust
+                    | Lang::Kotlin
+            )
         );
         filter_formatting(&mut hunks, modes.formatting, indentation_matters);
         if mode == LayerMode::Hidden {
@@ -315,13 +347,20 @@ impl FileReview {
         self.view(DiffModes::SHOWN).hunks.len()
     }
 
-    /// Whether the file is listed at all under this test-layer mode.
+    /// Whether the file is listed at all under this test-layer mode. A source file with
+    /// test blocks in it stays listed either way: hiding tests cuts the blocks out, and
+    /// showing only tests keeps just them.
     pub fn is_visible(&self, tests: LayerMode) -> bool {
         match tests {
             LayerMode::Shown => true,
             LayerMode::Hidden => !self.is_test,
-            LayerMode::Only => self.is_test,
+            LayerMode::Only => self.is_test || self.has_test_blocks(),
         }
+    }
+
+    /// Test code inside the file, in either version — Rust's `#[cfg(test)]` modules.
+    pub fn has_test_blocks(&self) -> bool {
+        !self.old_layers.tests.is_empty() || !self.new_layers.tests.is_empty()
     }
 
     /// The bracketed tag after the file name: language or detection problem, and `test`.

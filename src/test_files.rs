@@ -25,8 +25,9 @@ fn is_test_dir(dir: &str) -> bool {
 
 fn is_test_file_name(file: &str) -> bool {
     let stem = file.split('.').next().unwrap_or(file);
-    // CamelCase suffixes: FooTests.swift, FooTest.kt, FooSpec.swift, FooTests.cs.
-    let camel = ["Tests", "Test", "Spec"]
+    // CamelCase suffixes: FooTests.swift, FooTest.kt, FooTests.cs. Not `FooSpec`: too
+    // many real types end in Spec (`TypeSpec`); Quick and Kotest specs are found by import.
+    let camel = ["Tests", "Test"]
         .iter()
         .any(|suffix| stem.len() > suffix.len() && stem.ends_with(suffix));
     // Dotted and snake_case markers: foo.test.ts, foo.spec.tsx, foo_test.go, test_foo.py.
@@ -34,7 +35,8 @@ fn is_test_file_name(file: &str) -> bool {
         || file.contains(".spec.")
         || stem.ends_with("_test")
         || stem.ends_with("_spec")
-        || stem.starts_with("test_")
+        // `test_foo.py` is pytest's convention; elsewhere `test_` is just a name.
+        || (stem.starts_with("test_") && file.ends_with(".py"))
         || file == "conftest.py";
     camel || marked
 }
@@ -43,8 +45,10 @@ fn imports_test_framework(lang: Lang, content: &str) -> bool {
     content.lines().map(str::trim_start).any(|line| match lang {
         Lang::Swift => {
             line.starts_with("@testable import ")
-                || line == "import XCTest"
-                || line == "import Testing"
+                || matches!(
+                    line,
+                    "import XCTest" | "import Testing" | "import Quick" | "import Nimble"
+                )
         }
         Lang::Python => [
             "import pytest",
@@ -63,5 +67,11 @@ fn imports_test_framework(lang: Lang, content: &str) -> bool {
                             || line.contains(&format!("\"{module}"))
                     })
         }
+        Lang::Kotlin => ["org.junit", "kotlin.test", "io.kotest", "io.mockk"]
+            .iter()
+            .any(|package| line.starts_with(&format!("import {package}"))),
+        // Go keeps tests in `_test.go` files, and Rust inside source files, which the
+        // test-block spans cover.
+        Lang::Go | Lang::Rust => false,
     })
 }

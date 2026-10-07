@@ -101,11 +101,14 @@ pub fn annotate(projection: &mut Projection, lang: Lang) {
     projection.syntax = classes;
 }
 
-fn config(lang: Lang) -> Option<&'static HighlightConfiguration> {
+pub fn config(lang: Lang) -> Option<&'static HighlightConfiguration> {
     static SWIFT: OnceLock<Option<HighlightConfiguration>> = OnceLock::new();
     static TYPESCRIPT: OnceLock<Option<HighlightConfiguration>> = OnceLock::new();
     static TSX: OnceLock<Option<HighlightConfiguration>> = OnceLock::new();
     static PYTHON: OnceLock<Option<HighlightConfiguration>> = OnceLock::new();
+    static GO: OnceLock<Option<HighlightConfiguration>> = OnceLock::new();
+    static RUST: OnceLock<Option<HighlightConfiguration>> = OnceLock::new();
+    static KOTLIN: OnceLock<Option<HighlightConfiguration>> = OnceLock::new();
 
     let build = |query: String| {
         let mut config =
@@ -127,6 +130,9 @@ fn config(lang: Lang) -> Option<&'static HighlightConfiguration> {
         Lang::TypeScript => &TYPESCRIPT,
         Lang::Tsx | Lang::JavaScript => &TSX,
         Lang::Python => &PYTHON,
+        Lang::Go => &GO,
+        Lang::Rust => &RUST,
+        Lang::Kotlin => &KOTLIN,
     };
     cell.get_or_init(|| match lang {
         Lang::Swift => build(tree_sitter_swift::HIGHLIGHTS_QUERY.to_string()),
@@ -137,6 +143,9 @@ fn config(lang: Lang) -> Option<&'static HighlightConfiguration> {
             tree_sitter_javascript::JSX_HIGHLIGHT_QUERY
         )),
         Lang::Python => build(tree_sitter_python::HIGHLIGHTS_QUERY.to_string()),
+        Lang::Go => build(tree_sitter_go::HIGHLIGHTS_QUERY.to_string()),
+        Lang::Rust => build(tree_sitter_rust::HIGHLIGHTS_QUERY.to_string()),
+        Lang::Kotlin => build(include_str!("queries/kotlin.scm").to_string()),
     })
     .as_ref()
 }

@@ -135,11 +135,12 @@ changes, with correct line numbers, and toggling back restores the full diff.
 - Moved-code detection across files, collapsible with `M`.
 - Fewer partial Swift parses, and the line of the first error when one remains.
 - Open in editor at the cursor's line (`o`).
+- Go, Rust and Kotlin, with Rust's in-file `#[cfg(test)]` blocks as part of the tests layer.
 
 ## Roadmap
 
-1. In-file test blocks for the tests layer (Rust `#[cfg(test)] mod tests`, `@Test` in sources).
-2. More languages (Go, Rust, Kotlin, Java, C#).
+1. In-file test blocks beyond Rust (a stray `@Test` in a Swift or Kotlin source file).
+2. More languages (Java, C#, C/C++, Ruby).
 3. Side-by-side view.
 4. `git difftool` integration and JSON output.
 5. Per-repo config (`.declutter.toml`): custom test paths, logging APIs, extra layers defined
