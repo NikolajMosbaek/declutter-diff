@@ -45,8 +45,7 @@ Comments only (`C`) — check what the AI claims its code does, on its own:
 
 ![The key help over the viewer](https://raw.githubusercontent.com/NikolajMosbaek/declutter-diff/main/docs/images/keys.svg)
 
-The pictures are drawn by the viewer itself: `cargo run --example demo` regenerates them in
-`docs/images/`, and `vhs docs/demo.tape` / `vhs docs/pr.tape` record the animations.
+The pictures are drawn by the viewer itself — see [Development](#development) to redraw them.
 
 ## Review pull requests in one line
 
@@ -206,11 +205,48 @@ nano, Emacs, micro, Xcode (`xed`) and JetBrains IDEs; terminal editors take over
 until you quit them. With no editor set it uses the system opener. It opens the working-tree
 file, which is the reviewed version unless you're reviewing an older range.
 
-## Test
+## Development
 
 ```sh
-cargo test
+cargo test                       # the whole suite, about a second once built
+cargo test --test navigation     # one area (file names below)
+cargo test brackets              # tests whose name contains "brackets"
+cargo clippy --all-targets       # lint; kept at zero warnings
 ```
+
+The suite runs offline and touches nothing outside a temporary directory. It needs
+nothing but `git` on your `PATH`:
+
+- **Git fixtures** — repositories are built per test in temp directories, with your
+  global git config switched off, so they behave the same on every machine.
+- **Pull requests** — a local repository plays GitHub (a fake `github.com/acme/shop`
+  reached through git's `insteadOf`), with the PR published as a merge ref, the way the
+  hosts publish it. The `gh`/`az` lookup and the comment posting are swapped for stubs:
+  no test talks to GitHub or Azure DevOps.
+- **The viewer** — drawn into an in-memory terminal (ratatui's `TestBackend`), then
+  checked cell by cell: text, colours, the cursor, what a key press changes.
+
+What each test file covers:
+
+| File | What it pins down |
+|---|---|
+| `comments.rs` | Finding comments and docstrings in each language; hiding them without leaving gaps or false changes; line numbers staying true |
+| `test_layer.rs` | Which files count as tests; hiding them or showing only them |
+| `import_logging.rs` | Finding imports and logging-only statements; layers combining, and *only* winning over *hidden* |
+| `formatting.rs` | Telling whitespace-only changes from real ones — including Python, where indentation is code |
+| `moves.rs` | Spotting moved blocks within and across files, and not mistaking short or trivial runs for moves |
+| `inline.rs`, `syntax.rs` | Word-level highlights, syntax colours, the palette and the `s` toggle |
+| `parsing.rs` | Swift the grammar can't parse being stood in for, and partial parses saying where they failed |
+| `navigation.rs`, `tui.rs` | The keymap: changes and files, search, paging, `?`, `Esc`, `a`, keeping your place on layer toggles |
+| `review_marks.rs`, `notes.rs`, `editor.rs` | Review marks, notes and their prompt, opening the editor at the right line |
+| `git.rs`, `targets.rs` | What is compared: working tree, branches against main, ranges, untracked and deleted files, renames |
+| `pr.rs`, `upload.rs` | Opening PRs by URL or number, and posting notes — only on `y`, keeping the ones that fail |
+
+Most behaviours were checked the other way round too: break the code, see the test fail.
+
+The README's pictures are made from the same code — `cargo run --example demo` redraws
+the screenshots and `vhs docs/demo.tape` / `vhs docs/pr.tape` re-record the animations
+(`brew install vhs`).
 
 ## License
 
