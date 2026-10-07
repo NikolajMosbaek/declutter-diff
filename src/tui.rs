@@ -59,6 +59,8 @@ const KEYS: [&[KeyGroup]; 2] = [
             &[
                 ("r", "mark reviewed, go to the next file"),
                 ("m", "note the line under the cursor"),
+                ("P", "note on the change as a whole"),
+                ("Alt+⏎", "new line, while writing a note"),
                 ("E", "copy all notes as one prompt"),
                 ("o", "open in $EDITOR at the line"),
             ],
@@ -86,10 +88,12 @@ pub enum Focus {
     Diff,
 }
 
-/// A one-line prompt in the status bar.
+/// Text being typed: a note (on the cursor's line, or `General`ly on the change as a
+/// whole), or a search in the status bar.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Input {
     Note(String),
+    General(String),
     Search(String),
 }
 
@@ -149,6 +153,8 @@ pub struct App {
     pub notes: NoteStore,
     /// The prompt being typed, if one is open.
     pub input: Option<Input>,
+    /// Where typing goes in the input, in characters from its start.
+    input_cursor: usize,
     /// The last search, highlighted in the diff until cleared with Esc.
     pub search: Option<String>,
     pub show_help: bool,
@@ -175,6 +181,8 @@ pub struct App {
     pub quit: bool,
     /// Height of the diff pane at the last draw, for paging and keeping the cursor visible.
     diff_height: usize,
+    /// Width of the diff pane's text at the last draw, for wrapping notes.
+    diff_width: usize,
 }
 
 impl App {
@@ -204,6 +212,7 @@ impl App {
             store,
             notes,
             input: None,
+            input_cursor: 0,
             search: None,
             show_help: false,
             message: None,
@@ -219,6 +228,7 @@ impl App {
             syntax: true,
             quit: false,
             diff_height: 20,
+            diff_width: 80,
         };
         app.refilter();
         app.refresh_moves();
@@ -322,12 +332,13 @@ impl App {
                 Focus::Files => self.select(usize::MAX),
                 Focus::Diff => self.move_cursor(usize::MAX),
             },
-            KeyCode::Char('/') => self.input = Some(Input::Search(String::new())),
+            KeyCode::Char('/') => self.start_input(Input::Search(String::new())),
             KeyCode::Char('n') => self.find(true),
             KeyCode::Char('N') => self.find(false),
 
             KeyCode::Char('r') => self.toggle_reviewed(),
             KeyCode::Char('m') => self.open_note(),
+            KeyCode::Char('P') => self.open_general_note(),
             KeyCode::Char('E') => self.export_notes(),
             KeyCode::Char('o') => self.request_open(),
 
@@ -356,13 +367,32 @@ impl App {
         let Some(input) = self.input.as_mut() else {
             return;
         };
+        let is_note = !matches!(input, Input::Search(_));
         let text = match input {
-            Input::Note(text) | Input::Search(text) => text,
+            Input::Note(text) | Input::General(text) | Input::Search(text) => text,
+        };
+        let chars = text.chars().count();
+        self.input_cursor = self.input_cursor.min(chars);
+        let at = |cursor: usize| {
+            text.char_indices()
+                .nth(cursor)
+                .map_or(text.len(), |(i, _)| i)
         };
         match key.code {
             KeyCode::Esc => self.input = None,
+            // Terminals send Enter for Shift+Enter; Alt+Enter is the one that comes through.
+            KeyCode::Enter
+                if is_note
+                    && key
+                        .modifiers
+                        .intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) =>
+            {
+                text.insert(at(self.input_cursor), '\n');
+                self.input_cursor += 1;
+            }
             KeyCode::Enter => match self.input.take() {
                 Some(Input::Note(text)) => self.save_note(text),
+                Some(Input::General(text)) => self.save_general_note(text),
                 Some(Input::Search(query)) => {
                     if !query.is_empty() {
                         self.search = Some(query);
@@ -371,12 +401,31 @@ impl App {
                 }
                 None => {}
             },
-            KeyCode::Backspace => {
-                text.pop();
+            KeyCode::Left => self.input_cursor = self.input_cursor.saturating_sub(1),
+            KeyCode::Right => self.input_cursor = (self.input_cursor + 1).min(chars),
+            KeyCode::Home => self.input_cursor = 0,
+            KeyCode::End => self.input_cursor = chars,
+            KeyCode::Backspace if self.input_cursor > 0 => {
+                self.input_cursor -= 1;
+                text.remove(at(self.input_cursor));
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => text.push(c),
+            KeyCode::Delete if self.input_cursor < chars => {
+                text.remove(at(self.input_cursor));
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                text.insert(at(self.input_cursor), c);
+                self.input_cursor += 1;
+            }
             _ => {}
         }
+    }
+
+    /// Opens `input` with the cursor at the end of its text.
+    fn start_input(&mut self, input: Input) {
+        self.input_cursor = match &input {
+            Input::Note(text) | Input::General(text) | Input::Search(text) => text.chars().count(),
+        };
+        self.input = Some(input);
     }
 
     fn layer_mut(&mut self, layer: Layer) -> &mut LayerMode {
@@ -610,9 +659,25 @@ impl App {
             return;
         };
         let existing = self.notes.find(&path, anchor.side, anchor.line);
-        self.input = Some(Input::Note(
+        self.start_input(Input::Note(
             existing.map(|note| note.text.clone()).unwrap_or_default(),
         ));
+    }
+
+    /// Opens the editor on the note about the change as a whole.
+    fn open_general_note(&mut self) {
+        let existing = self.notes.general().map(|note| note.text.clone());
+        self.start_input(Input::General(existing.unwrap_or_default()));
+    }
+
+    fn save_general_note(&mut self, text: String) {
+        let note = Note {
+            draft: false,
+            ..Note::on_pull_request(text)
+        };
+        if let Err(error) = self.notes.set(note) {
+            self.message = Some(format!("could not save the note: {error:#}"));
+        }
     }
 
     fn save_note(&mut self, text: String) {
@@ -853,20 +918,65 @@ impl App {
                 if let Some(anchor) = anchor
                     && let Some(note) = self.notes.find(&file.path, anchor.side, anchor.line)
                 {
-                    push(
-                        &mut out,
-                        Line::from(format!("              ✎ {}", note.text))
-                            .fg(Color::Yellow)
-                            .bold(),
-                        Some(anchor),
-                        None,
-                    );
+                    for line in note_lines(note, self.diff_width) {
+                        push(&mut out, line, Some(anchor.clone()), None);
+                    }
                 }
             }
             out.changes.extend(first_change);
         }
         out
     }
+}
+
+/// How far a note is indented under its line.
+const NOTE_INDENT: usize = 14;
+
+/// A note under its line: its text wrapped to the pane, a draft marked as one.
+fn note_lines(note: &Note, width: usize) -> Vec<Line<'static>> {
+    let marker = if note.draft { "✎ draft · " } else { "✎ " };
+    let width = width.saturating_sub(NOTE_INDENT + 2).max(20);
+    let style = if note.draft {
+        Style::new().fg(Color::Yellow).italic()
+    } else {
+        Style::new().fg(Color::Yellow).bold()
+    };
+    let mut first = true;
+    wrap(&format!("{marker}{}", note.text.trim()), width)
+        .into_iter()
+        .map(|text| {
+            let indent = if first { NOTE_INDENT } else { NOTE_INDENT + 2 };
+            first = false;
+            Line::from(format!("{}{text}", " ".repeat(indent))).style(style)
+        })
+        .collect()
+}
+
+/// `text` broken into rows of at most `width` characters, at spaces where it can be,
+/// keeping its own line breaks.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut rows = Vec::new();
+    for line in text.split('\n') {
+        let mut row = String::new();
+        for word in line.split(' ') {
+            let row_len = row.chars().count();
+            let word_len = word.chars().count();
+            if row_len > 0 && row_len + 1 + word_len > width {
+                rows.push(std::mem::take(&mut row));
+            } else if row_len > 0 {
+                row.push(' ');
+            }
+            row.push_str(word);
+            while row.chars().count() > width {
+                let rest: String = row.chars().skip(width).collect();
+                rows.push(row.chars().take(width).collect());
+                row = rest;
+            }
+        }
+        rows.push(row);
+    }
+    rows
 }
 
 /// Byte ranges of `query` in `text`; case-insensitive unless the query has a capital.
@@ -1024,7 +1134,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             let visible = file.view(app.layers).hunks.len();
             let reviewed = app.store.is_reviewed(file);
             let mark = if reviewed { "✓ " } else { "  " };
-            let item = ListItem::new(format!("{mark}{} ({visible})", file_title(file)));
+            let noted = app
+                .notes
+                .notes()
+                .iter()
+                .filter(|note| note.path == file.path)
+                .count();
+            let noted = match noted {
+                0 => String::new(),
+                n => format!(" ✎{n}"),
+            };
+            let item = ListItem::new(format!("{mark}{} ({visible}){noted}", file_title(file)));
             if visible == 0 || reviewed {
                 item.dim()
             } else {
@@ -1050,6 +1170,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     );
 
     app.diff_height = diff_area.height.saturating_sub(2) as usize;
+    // Inside the borders, less the cursor's gutter.
+    app.diff_width = diff_area.width.saturating_sub(3) as usize;
     let lines = app.diff_view().lines;
     app.cursor = app.cursor.min(lines.len().saturating_sub(1));
     app.scroll = app.scroll.min(lines.len().saturating_sub(app.diff_height));
@@ -1082,25 +1204,27 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     let (reviewed, listed) = app.review_progress();
     let summary = match (&app.input, &app.message) {
-        (Some(Input::Note(text)), _) => {
-            format!("note › {text}█   (Enter save · Esc cancel · empty removes)")
+        (Some(Input::Note(_) | Input::General(_)), _) => {
+            "Enter save · Alt+Enter new line · ← → Home End move · Esc cancel · empty removes"
+                .to_string()
         }
-        (Some(Input::Search(query)), _) => format!("/{query}█   (Enter search · Esc cancel)"),
+        (Some(Input::Search(query)), _) => format!(
+            "/{}   (Enter search · Esc cancel)",
+            with_cursor(query, app.input_cursor)
+        ),
         (None, Some(message)) => message.clone(),
         (None, None) => format!(
             "{} · {reviewed}/{listed} reviewed{}",
             Summary::new(&app.files, app.layers).status_line(app.layers),
-            match app.notes.notes().len() {
-                0 => String::new(),
-                n => format!(" · {n} note{}", if n == 1 { "" } else { "s" }),
-            } + &match (app.moved_blocks(), app.collapse_moves) {
-                (0, _) => String::new(),
-                (n, collapsed) => format!(
-                    " · {n} moved block{}{}",
-                    if n == 1 { "" } else { "s" },
-                    if collapsed { " (collapsed)" } else { "" }
-                ),
-            }
+            notes_status(&app.notes)
+                + &match (app.moved_blocks(), app.collapse_moves) {
+                    (0, _) => String::new(),
+                    (n, collapsed) => format!(
+                        " · {n} moved block{}{}",
+                        if n == 1 { "" } else { "s" },
+                        if collapsed { " (collapsed)" } else { "" }
+                    ),
+                }
         ),
     };
     frame.render_widget(
@@ -1108,6 +1232,39 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         status,
     );
     frame.render_widget(Paragraph::new(HELP).dim(), help);
+    if let Some(Input::Note(text) | Input::General(text)) = &app.input {
+        let title = match &app.input {
+            Some(Input::General(_)) => " Note on the change as a whole ".to_string(),
+            _ => match app.cursor_anchor() {
+                Some((path, anchor)) if anchor.side == NoteSide::Old => {
+                    format!(" Note on {path}, removed line {} ", anchor.line)
+                }
+                Some((path, anchor)) => format!(" Note on {path}:{} ", anchor.line),
+                None => " Note ".to_string(),
+            },
+        };
+        let width = diff_area.width.saturating_sub(4) as usize;
+        let rows = wrap(&with_cursor(text, app.input_cursor), width);
+        let height = (rows.len() as u16 + 2).min(diff_area.height);
+        let area = Rect {
+            y: diff_area.bottom().saturating_sub(height),
+            height,
+            ..diff_area
+        };
+        let block = pane(title, true);
+        let inner = block.inner(area);
+        frame.render_widget(Clear, area);
+        frame.render_widget(block, area);
+        let text: Vec<Line> = rows.into_iter().map(Line::from).collect();
+        frame.render_widget(
+            Paragraph::new(text).fg(Color::Yellow),
+            Rect {
+                x: inner.x + 1,
+                width: inner.width.saturating_sub(1),
+                ..inner
+            },
+        );
+    }
     if app.show_help {
         draw_help(frame);
     }
@@ -1156,6 +1313,31 @@ fn draw_help(frame: &mut Frame) {
     for area in [left_column, right_column] {
         frame.render_widget(Paragraph::new(columns.next().unwrap_or_default()), area);
     }
+}
+
+/// `text` with a block cursor drawn `cursor` characters in.
+fn with_cursor(text: &str, cursor: usize) -> String {
+    let at = text
+        .char_indices()
+        .nth(cursor)
+        .map_or(text.len(), |(i, _)| i);
+    format!("{}█{}", &text[..at], &text[at..])
+}
+
+/// " · 3 notes (2 drafts)", and a pointer to a draft note on the whole change.
+fn notes_status(notes: &NoteStore) -> String {
+    let all = notes.notes();
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    let drafts = all.iter().filter(|note| note.draft).count();
+    let mut status = match (all.len(), drafts) {
+        (0, _) => String::new(),
+        (n, 0) => format!(" · {n} note{}", plural(n)),
+        (n, d) => format!(" · {n} note{} ({d} draft{})", plural(n), plural(d)),
+    };
+    if notes.general().is_some_and(|note| note.draft) {
+        status.push_str(" · P: draft on the whole change");
+    }
+    status
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {

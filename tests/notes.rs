@@ -8,7 +8,7 @@ use declutter::store::{Added, Link, Note, NoteSide, NoteStore};
 use declutter::tui::{App, draw};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tempfile::TempDir;
 
 fn note(path: &str, side: NoteSide, line: usize, text: &str) -> Note {
@@ -275,4 +275,142 @@ fn posted_notes_are_logged_with_their_link_and_leave_the_store() {
     assert_eq!(log[0].note.review.as_deref(), Some("PR 7"));
     assert_eq!(log[0].link.url, "https://example.com/11");
     assert!(log[0].posted_at > 1_700_000_000);
+}
+
+fn screen(app: &mut App, width: u16, height: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal.draw(|frame| draw(frame, app)).expect("draw");
+    let buffer = terminal.backend().buffer();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                + "\n"
+        })
+        .collect()
+}
+
+fn rate_app(notes: NoteStore) -> App {
+    let file = FileReview::new(FileChange {
+        path: "rate.ts".to_string(),
+        old_path: None,
+        status: ChangeStatus::Modified,
+        old: Some("const rate = 5;\n".to_string()),
+        new: Some("const rate = 0.05;\n".to_string()),
+        binary: false,
+    });
+    App::with_stores(
+        vec![file],
+        Layers::default(),
+        declutter::store::ReviewStore::in_memory(),
+        notes,
+    )
+}
+
+#[test]
+fn a_draft_shows_as_one_until_opened_and_keeps_its_lines() {
+    let mut notes = NoteStore::in_memory();
+    notes
+        .add(draft(
+            "rate.ts",
+            1,
+            "A fraction now, not a percentage.\nEvery caller still passes 5, which is now 500%: \
+             multiply by a hundred where it is shown, and divide where it is read.",
+        ))
+        .expect("add");
+    let mut app = rate_app(notes);
+    let key = |code| KeyEvent::from(code);
+
+    let shown = screen(&mut app, 150, 16);
+    assert!(
+        shown.contains("✎ draft · A fraction now, not a percentage."),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("│                 Every caller still passes 5"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("│                 shown, and divide where it is read."),
+        "wrapped, under the text: {shown}"
+    );
+    assert!(
+        shown.contains("rate.ts (1) ✎1"),
+        "the file list marks noted files: {shown}"
+    );
+    assert!(shown.contains("1 note (1 draft)"), "{shown}");
+
+    app.handle_key(key(KeyCode::Right));
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Char('m')));
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.notes.notes()[0].draft, "Esc leaves it a draft");
+
+    app.handle_key(key(KeyCode::Char('m')));
+    let editing = screen(&mut app, 150, 16);
+    assert!(
+        editing.contains("Every caller still passes 5"),
+        "the editor shows it all: {editing}"
+    );
+    app.handle_key(key(KeyCode::Enter));
+    let opened = app.notes.notes()[0];
+    assert!(!opened.draft, "opened and saved, it is the reviewer's");
+    assert!(
+        opened.text.ends_with("where it is read."),
+        "unchanged: {}",
+        opened.text
+    );
+    assert!(screen(&mut app, 150, 16).contains("✎ A fraction now"));
+}
+
+#[test]
+fn the_note_editor_moves_its_cursor_and_takes_new_lines() {
+    let mut app = rate_app(NoteStore::in_memory());
+    let key = |code| KeyEvent::from(code);
+    app.handle_key(key(KeyCode::Char('m')));
+    for c in "why 5?".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Left));
+    app.handle_key(key(KeyCode::Backspace));
+    app.handle_key(key(KeyCode::Char('0')));
+    app.handle_key(key(KeyCode::Char('.')));
+    app.handle_key(key(KeyCode::Char('0')));
+    app.handle_key(key(KeyCode::Char('5')));
+    app.handle_key(key(KeyCode::End));
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+    for c in "It was a percentage.".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+
+    assert_eq!(app.notes.notes()[0].text, "why 0.05?\nIt was a percentage.");
+}
+
+#[test]
+fn shift_p_notes_the_change_as_a_whole() {
+    let mut notes = NoteStore::in_memory();
+    notes
+        .add(Note::on_pull_request("No test covers the new rate."))
+        .expect("add");
+    let mut app = rate_app(notes);
+    let key = |code| KeyEvent::from(code);
+
+    let shown = screen(&mut app, 150, 16);
+    assert!(shown.contains("P: draft on the whole change"), "{shown}");
+
+    app.handle_key(key(KeyCode::Char('P')));
+    assert!(
+        screen(&mut app, 150, 16).contains("No test covers the new rate."),
+        "the draft is shown to be read"
+    );
+    for c in " Add one.".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+
+    let general = app.notes.general().expect("the note on the whole change");
+    assert_eq!(general.text, "No test covers the new rate. Add one.");
+    assert!(!general.draft);
 }
