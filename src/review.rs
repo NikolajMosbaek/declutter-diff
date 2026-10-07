@@ -447,6 +447,8 @@ pub struct Summary {
     pub filtered_files: usize,
     pub unsupported_files: usize,
     pub partial_files: usize,
+    /// Listed files with test blocks inside them (Rust's `#[cfg(test)]` modules).
+    pub test_block_files: usize,
 }
 
 impl Summary {
@@ -464,6 +466,9 @@ impl Summary {
             summary.hidden_hunks += view.hidden_hunks;
             if file.total_hunks() > 0 && view.hunks.is_empty() {
                 summary.fully_hidden_files += 1;
+            }
+            if file.has_test_blocks() {
+                summary.test_block_files += 1;
             }
             match file.detection {
                 Detection::Unsupported => summary.unsupported_files += 1,
@@ -492,7 +497,12 @@ impl Summary {
             states
         };
 
-        let modes = DiffModes::from(layers);
+        let mut modes = DiffModes::from(layers);
+        // With no test blocks inside the listed files, the test layer only filters files,
+        // which is reported on its own below; it hides no hunks.
+        if self.test_block_files == 0 {
+            modes.tests = LayerMode::Shown;
+        }
         let adjective = modes.adjective();
         match modes.outcome().0 {
             LayerMode::Shown => parts.push(format!(

@@ -187,6 +187,18 @@ fn the_test_layer_cuts_or_keeps_rust_test_blocks_in_a_source_file() {
         file.is_visible(LayerMode::Hidden),
         "still listed when tests are hidden"
     );
+
+    let layers = declutter::review::Layers {
+        tests: LayerMode::Hidden,
+        comments: LayerMode::Shown,
+        ..Default::default()
+    };
+    let status =
+        declutter::review::Summary::new(std::slice::from_ref(&file), layers).status_line(layers);
+    assert!(
+        status.contains("test-only hunks hidden"),
+        "with test blocks listed, hidden test hunks are named as such: {status}"
+    );
 }
 
 #[test]

@@ -110,7 +110,7 @@ fn hiding_tests_leaves_test_files_out_and_says_how_many() {
     assert_eq!((summary.files, summary.filtered_files), (1, 2));
     assert_eq!(
         summary.status_line(layers),
-        "comments: hidden · tests: hidden · showing 1 of 1 hunks · 0 comment/test-only hunks hidden · 2 test files hidden"
+        "comments: hidden · tests: hidden · showing 1 of 1 hunks · 0 comment-only hunks hidden · 2 test files hidden"
     );
 
     let text = plain(&files, layers);
