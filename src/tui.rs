@@ -626,6 +626,7 @@ impl App {
             code: anchor.code,
             text,
             review: None,
+            draft: false,
         };
         if let Err(error) = self.notes.set(note) {
             self.message = Some(format!("could not save the note: {error:#}"));

@@ -1,12 +1,15 @@
 use std::collections::HashSet;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::diff::RowKind;
 use crate::git::git;
-use crate::review::FileReview;
+use crate::review::{DiffModes, FileReview};
 
 /// Which changes the reviewer has marked as reviewed. A mark belongs to a file's exact
 /// change — its path and both versions — so it lapses as soon as either version moves,
@@ -105,7 +108,8 @@ pub enum NoteSide {
     New,
 }
 
-/// A reviewer's note on one line of a change.
+/// A reviewer's note on one line of a change, or — with an empty path — on the change
+/// as a whole.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Note {
     pub path: String,
@@ -118,6 +122,42 @@ pub struct Note {
     /// `origin/main...feature` — so it only shows up, and is only posted, there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<String>,
+    /// Added from outside the viewer (`declutter notes add`) and not yet opened by the
+    /// reviewer. Drafts are never posted: opening one with `m` makes it the reviewer's.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub draft: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+/// What [`NoteStore::add`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Added {
+    New,
+    /// The line already had a note; the text went under it.
+    Appended,
+    /// The line's note already says this.
+    Duplicate,
+}
+
+/// Where a posted note ended up on the host.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Link {
+    pub id: String,
+    pub url: String,
+}
+
+/// A note as it was posted, kept in `posted.jsonl` next to the notes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Posted {
+    #[serde(flatten)]
+    pub note: Note,
+    /// Seconds since the Unix epoch.
+    pub posted_at: u64,
+    #[serde(flatten)]
+    pub link: Link,
 }
 
 /// Review notes, kept in `<git common dir>/declutter/notes.json` until cleared or
@@ -127,6 +167,8 @@ pub struct NoteStore {
     path: Option<PathBuf>,
     notes: Vec<Note>,
     scope: Option<String>,
+    /// What an in-memory store has posted; a stored one keeps it in `posted.jsonl`.
+    posted: Vec<Posted>,
 }
 
 impl NoteStore {
@@ -146,6 +188,7 @@ impl NoteStore {
             path: Some(path),
             notes,
             scope: None,
+            posted: Vec::new(),
         }
     }
 
@@ -154,6 +197,7 @@ impl NoteStore {
             path: None,
             notes: Vec::new(),
             scope: None,
+            posted: Vec::new(),
         }
     }
 
@@ -185,21 +229,101 @@ impl NoteStore {
         })
     }
 
+    /// The note on the change as a whole, if there is one.
+    pub fn general(&self) -> Option<&Note> {
+        self.find("", NoteSide::New, 0)
+    }
+
     /// Adds or replaces the note on the same line of this review; an empty text removes it.
     pub fn set(&mut self, mut note: Note) -> Result<()> {
         note.review = self.scope.clone();
-        self.notes.retain(|n| {
-            !(n.review == note.review
-                && n.path == note.path
-                && n.side == note.side
-                && n.line == note.line)
-        });
+        self.notes.retain(|n| !n.same_place(&note));
         if !note.text.trim().is_empty() {
             self.notes.push(note);
             self.notes
                 .sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
         }
         self.save()
+    }
+
+    /// Adds a note, putting its text under any note already on that line rather than
+    /// replacing it. A note that gains text it didn't have takes the new note's draft
+    /// state, so text nobody has read is never posted as read.
+    pub fn add(&mut self, mut note: Note) -> Result<Added> {
+        note.review = self.scope.clone();
+        let text = note.text.trim().to_string();
+        let added = match self.notes.iter_mut().find(|n| n.same_place(&note)) {
+            Some(existing) if existing.text.contains(&text) => return Ok(Added::Duplicate),
+            Some(existing) => {
+                existing.text = format!("{}\n\n{text}", existing.text.trim_end());
+                existing.draft |= note.draft;
+                Added::Appended
+            }
+            None => {
+                note.text = text;
+                self.notes.push(note);
+                self.notes
+                    .sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
+                Added::New
+            }
+        };
+        self.save()?;
+        Ok(added)
+    }
+
+    /// Logs these notes as posted, each with where it landed, and drops them from the store.
+    pub fn record_posted(&mut self, posted: &[(Note, Link)]) -> Result<()> {
+        let posted_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs());
+        let records: Vec<Posted> = posted
+            .iter()
+            .map(|(note, link)| Posted {
+                note: Note {
+                    review: self.scope.clone().or_else(|| note.review.clone()),
+                    ..note.clone()
+                },
+                posted_at,
+                link: link.clone(),
+            })
+            .collect();
+        match self.log_path() {
+            Some(log) => {
+                let mut lines = String::new();
+                for record in &records {
+                    lines.push_str(&serde_json::to_string(record)?);
+                    lines.push('\n');
+                }
+                fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log)
+                    .and_then(|mut file| file.write_all(lines.as_bytes()))
+                    .with_context(|| format!("writing {}", log.display()))?;
+            }
+            None => self.posted.extend(records),
+        }
+        let gone: Vec<Note> = posted.iter().map(|(note, _)| note.clone()).collect();
+        self.remove(&gone)
+    }
+
+    /// This review's posted notes, oldest first.
+    pub fn posted(&self) -> Vec<Posted> {
+        let all = match self.log_path() {
+            Some(log) => fs::read_to_string(log)
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|line| serde_json::from_str(line).ok())
+                .collect(),
+            None => self.posted.clone(),
+        };
+        all.into_iter()
+            .filter(|posted: &Posted| self.in_scope(&posted.note))
+            .collect()
+    }
+
+    fn log_path(&self) -> Option<PathBuf> {
+        Some(self.path.as_ref()?.with_file_name("posted.jsonl"))
     }
 
     /// Deletes this review's notes (every note, when the store is not scoped).
@@ -222,13 +346,17 @@ impl NoteStore {
             "Please address these review comments. Line numbers refer to the version under review.\n",
         );
         for (i, note) in self.notes().into_iter().enumerate() {
-            out.push_str(&format!(
-                "\n{}. {}: {}\n   ```\n   {}\n   ```\n",
-                i + 1,
-                note.place(),
-                note.text.trim(),
-                note.code.trim()
-            ));
+            let text = note.text.trim().replace('\n', "\n   ");
+            if note.is_general() {
+                out.push_str(&format!("\n{}. On the change as a whole: {text}\n", i + 1));
+            } else {
+                out.push_str(&format!(
+                    "\n{}. {}: {text}\n   ```\n   {}\n   ```\n",
+                    i + 1,
+                    note.place(),
+                    note.code.trim()
+                ));
+            }
         }
         out
     }
@@ -242,13 +370,112 @@ impl NoteStore {
 }
 
 impl Note {
+    /// A draft note on the change as a whole rather than on a line.
+    pub fn on_pull_request(text: impl Into<String>) -> Note {
+        Note {
+            path: String::new(),
+            side: NoteSide::New,
+            line: 0,
+            code: String::new(),
+            text: text.into(),
+            review: None,
+            draft: true,
+        }
+    }
+
+    /// A draft note on `line` of `path`, which must be a row of the change's diff —
+    /// with every layer shown — since that is where the viewer can show it. A removed
+    /// line is on the old side; added and unchanged lines are on the new side.
+    pub fn on_line(
+        files: &[FileReview],
+        path: &str,
+        side: NoteSide,
+        line: usize,
+        text: impl Into<String>,
+    ) -> Result<Note> {
+        let Some(file) = files.iter().find(|file| file.path == path) else {
+            bail!("`{path}` is not part of this change");
+        };
+        let view = file.view(DiffModes::SHOWN);
+        let rows = view.hunks.iter().flat_map(|hunk| &hunk.rows);
+        let lines: Vec<(usize, &str)> = rows
+            .filter_map(|row| match (side, row.kind) {
+                (NoteSide::Old, RowKind::Removed) => Some((row.old_line?, row.text.as_str())),
+                (NoteSide::New, RowKind::Added | RowKind::Context) => {
+                    Some((row.new_line?, row.text.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        let Some((_, code)) = lines.iter().find(|(n, _)| *n == line) else {
+            let (place, which) = match side {
+                NoteSide::New => (format!("`{path}:{line}`"), "the lines"),
+                NoteSide::Old => (
+                    format!("removed line {line} of `{path}`"),
+                    "the removed lines",
+                ),
+            };
+            if lines.is_empty() {
+                bail!("{place} is not in the diff, which has no such lines");
+            }
+            let numbers: Vec<usize> = lines.iter().map(|(n, _)| *n).collect();
+            bail!(
+                "{place} is not in the diff; {which} in it are {}",
+                ranges(&numbers)
+            );
+        };
+        Ok(Note {
+            path: path.to_string(),
+            side,
+            line,
+            code: code.to_string(),
+            text: text.into().trim().to_string(),
+            review: None,
+            draft: true,
+        })
+    }
+
+    pub fn is_general(&self) -> bool {
+        self.path.is_empty()
+    }
+
+    fn same_place(&self, other: &Note) -> bool {
+        self.review == other.review
+            && self.path == other.path
+            && self.side == other.side
+            && self.line == other.line
+    }
+
     /// "`Cart.swift:12`", or "`Cart.swift` (removed line 12)".
     pub fn place(&self) -> String {
+        if self.is_general() {
+            return "the change as a whole".to_string();
+        }
         match self.side {
             NoteSide::New => format!("`{}:{}`", self.path, self.line),
             NoteSide::Old => format!("`{}` (removed line {})", self.path, self.line),
         }
     }
+}
+
+/// "3, 12–18, 40–52" for sorted line numbers.
+fn ranges(numbers: &[usize]) -> String {
+    let mut sorted = numbers.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let mut parts: Vec<String> = Vec::new();
+    let mut start = 0;
+    for i in 0..sorted.len() {
+        if i + 1 == sorted.len() || sorted[i + 1] != sorted[i] + 1 {
+            parts.push(if start == i {
+                sorted[i].to_string()
+            } else {
+                format!("{}–{}", sorted[start], sorted[i])
+            });
+            start = i + 1;
+        }
+    }
+    parts.join(", ")
 }
 
 fn key(file: &FileReview) -> (String, u64) {

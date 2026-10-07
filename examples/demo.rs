@@ -270,6 +270,7 @@ fn screenshots() -> std::io::Result<()> {
             code: "  if (discount < 0 || discount > 1) {".to_string(),
             text: "Should a 100% discount be allowed?".to_string(),
             review: None,
+            draft: false,
         })
         .expect("in-memory note");
     // From the first change down to the noted `if`.

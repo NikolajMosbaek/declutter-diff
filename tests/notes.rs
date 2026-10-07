@@ -4,7 +4,7 @@ use std::sync::Mutex;
 
 use common::git;
 use declutter::review::{ChangeStatus, FileChange, FileReview, Layers};
-use declutter::store::{Note, NoteSide, NoteStore};
+use declutter::store::{Added, Link, Note, NoteSide, NoteStore};
 use declutter::tui::{App, draw};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -19,6 +19,7 @@ fn note(path: &str, side: NoteSide, line: usize, text: &str) -> Note {
         code: "let a = 2".into(),
         text: text.into(),
         review: None,
+        draft: false,
     }
 }
 
@@ -116,6 +117,7 @@ fn m_notes_the_cursor_line_and_e_exports_every_note() {
             code: "const rate = 0.05;".into(),
             text: "use a fraction".into(),
             review: None,
+            draft: false,
         }]
     );
     let mut terminal = Terminal::new(TestBackend::new(110, 14)).expect("terminal");
@@ -173,4 +175,104 @@ fn the_notes_command_prints_and_clears_the_prompt() {
     assert!(run(&["notes"]).contains("1. `a.swift:3`: rename"));
     assert_eq!(run(&["notes", "--clear"]), "Cleared 1 note.\n");
     assert!(run(&["notes"]).starts_with("No review notes."));
+}
+
+fn draft(path: &str, line: usize, text: &str) -> Note {
+    Note {
+        draft: true,
+        ..note(path, NoteSide::New, line, text)
+    }
+}
+
+#[test]
+fn adding_to_a_noted_line_appends_and_makes_it_a_draft_again() {
+    let dir = TempDir::new().expect("temp dir");
+    let path = dir.path().join("notes.json");
+    let mut store = NoteStore::at(path.clone()).scoped("PR 7");
+    store
+        .set(note("a.swift", NoteSide::New, 3, "mine"))
+        .expect("save");
+
+    assert_eq!(
+        store
+            .add(draft("a.swift", 3, "from the agent"))
+            .expect("add"),
+        Added::Appended
+    );
+    assert_eq!(
+        store
+            .add(draft("a.swift", 3, "from the agent"))
+            .expect("add"),
+        Added::Duplicate,
+        "adding the same text again changes nothing"
+    );
+    assert_eq!(
+        store.add(draft("a.swift", 4, "elsewhere")).expect("add"),
+        Added::New
+    );
+
+    let reopened = NoteStore::at(path).scoped("PR 7");
+    let noted = reopened.find("a.swift", NoteSide::New, 3).expect("note");
+    assert_eq!(noted.text, "mine\n\nfrom the agent");
+    assert!(noted.draft, "unread text was added");
+    assert_eq!(reopened.notes().len(), 2);
+}
+
+#[test]
+fn a_pull_request_note_has_no_line_and_comes_first_in_the_prompt() {
+    let mut store = NoteStore::in_memory();
+    store
+        .set(note("a.swift", NoteSide::New, 3, "use a constant"))
+        .expect("save");
+    store
+        .add(Note::on_pull_request(
+            "Nothing tests the new branch.\nAdd a case for it.",
+        ))
+        .expect("add");
+
+    let general = store.general().expect("the PR note");
+    assert!(general.is_general() && general.draft);
+    assert_eq!(
+        store.prompt(),
+        "Please address these review comments. Line numbers refer to the version under review.\n\
+         \n1. On the change as a whole: Nothing tests the new branch.\n   Add a case for it.\n\
+         \n2. `a.swift:3`: use a constant\n   ```\n   let a = 2\n   ```\n"
+    );
+}
+
+#[test]
+fn posted_notes_are_logged_with_their_link_and_leave_the_store() {
+    let dir = TempDir::new().expect("temp dir");
+    let path = dir.path().join("notes.json");
+    let mut store = NoteStore::at(path.clone()).scoped("PR 7");
+    store
+        .set(note("a.swift", NoteSide::New, 3, "rename"))
+        .expect("save");
+    store
+        .set(note("a.swift", NoteSide::New, 4, "split"))
+        .expect("save");
+    let posted = store.notes()[0].clone();
+
+    store
+        .record_posted(&[(
+            posted.clone(),
+            Link {
+                id: "11".into(),
+                url: "https://example.com/11".into(),
+            },
+        )])
+        .expect("record");
+    NoteStore::at(path.clone())
+        .scoped("PR 8")
+        .record_posted(&[(note("b.swift", NoteSide::New, 1, "other"), Link::default())])
+        .expect("record");
+
+    let reopened = NoteStore::at(path).scoped("PR 7");
+    assert_eq!(reopened.notes().len(), 1);
+    let log = reopened.posted();
+    assert_eq!(log.len(), 1, "only this review's posts: {log:?}");
+    assert_eq!(log[0].note.text, "rename");
+    assert_eq!(log[0].note.review.as_deref(), Some("PR 7"));
+    assert_eq!(log[0].link.url, "https://example.com/11");
+    assert!(log[0].posted_at > 1_700_000_000);
 }

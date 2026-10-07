@@ -36,6 +36,7 @@ fn note(path: &str, side: NoteSide, line: usize, text: &str) -> Note {
         code: "let a = 2".into(),
         text: text.into(),
         review: None,
+        draft: false,
     }
 }
 
