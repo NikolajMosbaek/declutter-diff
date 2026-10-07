@@ -2,8 +2,10 @@ use std::cell::RefCell;
 
 use anyhow::{Result, bail};
 use declutter::pr::{PullRequest, Repo};
-use declutter::store::{Note, NoteSide, NoteStore};
-use declutter::upload::{Poster, azure_thread, github_comment, offer_upload};
+use declutter::store::{Link, Note, NoteSide, NoteStore};
+use declutter::upload::{
+    Poster, azure_link, azure_thread, github_comment, github_review, offer_upload,
+};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -130,12 +132,20 @@ struct Recorder {
 }
 
 impl Poster for Recorder {
-    fn post(&self, _: &PullRequest, note: &Note) -> Result<()> {
-        if note.text == "fail" {
-            bail!("403 forbidden");
-        }
-        self.posted.borrow_mut().push(note.text.clone());
-        Ok(())
+    fn post(&self, _: &PullRequest, notes: &[Note]) -> Vec<Result<Link>> {
+        notes
+            .iter()
+            .map(|note| {
+                if note.text == "fail" {
+                    bail!("403 forbidden");
+                }
+                self.posted.borrow_mut().push(note.text.clone());
+                Ok(Link {
+                    id: note.line.to_string(),
+                    url: format!("https://example.com/{}", note.line),
+                })
+            })
+            .collect()
     }
 }
 
@@ -151,7 +161,15 @@ fn store_with(dir: &TempDir, review: &str, texts: &[&str]) -> NoteStore {
 
 fn answer(store: &mut NoteStore, poster: &Recorder, reply: &str) -> String {
     let mut out = Vec::new();
-    offer_upload(store, &azure_pr(), poster, &mut reply.as_bytes(), &mut out).expect("offer");
+    offer_upload(
+        store,
+        &azure_pr(),
+        poster,
+        false,
+        &mut reply.as_bytes(),
+        &mut out,
+    )
+    .expect("offer");
     String::from_utf8(out).expect("utf8")
 }
 
@@ -219,5 +237,117 @@ fn notes_from_another_review_are_not_offered() {
     assert_eq!(
         NoteStore::at(dir.path().join("notes.json")).notes().len(),
         1
+    );
+}
+
+#[test]
+fn drafts_are_held_back_until_opened() {
+    let dir = TempDir::new().expect("temp dir");
+    let mut store = store_with(&dir, "PR 42", &["rename"]);
+    store
+        .add(Note {
+            draft: true,
+            ..note("a.swift", NoteSide::New, 5, "from the agent")
+        })
+        .expect("add");
+    store
+        .add(Note::on_pull_request("No test covers this."))
+        .expect("add");
+    let poster = Recorder::default();
+
+    let out = answer(&mut store, &poster, "y\n");
+
+    assert!(out.contains("Post 1 comment to PR 42? [y/N]"), "{out}");
+    assert!(out.contains("2 draft notes not opened — kept"), "{out}");
+    assert_eq!(poster.posted.borrow().as_slice(), ["rename"]);
+    assert_eq!(store.notes().len(), 2);
+
+    let only_drafts = answer(&mut store, &poster, "y\n");
+    assert!(
+        !only_drafts.contains("[y/N]"),
+        "nothing to ask: {only_drafts}"
+    );
+    assert!(
+        only_drafts.contains("2 draft notes not opened — kept"),
+        "{only_drafts}"
+    );
+}
+
+#[test]
+fn yes_up_front_posts_without_asking_and_logs_where_each_note_went() {
+    let dir = TempDir::new().expect("temp dir");
+    let mut store = store_with(&dir, "PR 42", &["rename", "split"]);
+    let poster = Recorder::default();
+    let mut out = Vec::new();
+
+    offer_upload(
+        &mut store,
+        &azure_pr(),
+        &poster,
+        true,
+        &mut "".as_bytes(),
+        &mut out,
+    )
+    .expect("offer");
+
+    let out = String::from_utf8(out).expect("utf8");
+    assert!(!out.contains("[y/N]"), "{out}");
+    assert!(out.contains("Posted 2 comments to PR 42."), "{out}");
+    let log = NoteStore::at(dir.path().join("notes.json"))
+        .scoped("PR 42")
+        .posted();
+    let urls: Vec<&str> = log.iter().map(|p| p.link.url.as_str()).collect();
+    assert_eq!(urls, ["https://example.com/1", "https://example.com/2"]);
+}
+
+#[test]
+fn a_note_on_the_whole_change_is_a_thread_without_a_line() {
+    let (_, body) = azure_thread(&azure_pr(), &Note::on_pull_request(" Untested. "));
+
+    assert_eq!(
+        body,
+        json!({
+            "comments": [{ "parentCommentId": 0, "content": "Untested.", "commentType": 1 }],
+            "status": "active",
+        })
+    );
+    assert_eq!(
+        azure_link(&azure_pr(), "77"),
+        "https://dev.azure.com/Contoso/Mobile%20Apps/_git/ios/pullrequest/42?discussionId=77"
+    );
+}
+
+#[test]
+fn github_gets_one_review_with_the_line_notes_as_its_comments() {
+    let notes = [
+        Note::on_pull_request("Untested.\nAdd a case."),
+        note("a.swift", NoteSide::New, 9, "nit"),
+        note("a.swift", NoteSide::Old, 3, "why?"),
+    ];
+
+    let (args, body) = github_review(&github_pr(), &notes, "abc123");
+
+    assert_eq!(
+        args,
+        [
+            "api",
+            "--method",
+            "POST",
+            "repos/acme/shop/pulls/7/reviews",
+            "--input",
+            "-"
+        ]
+    );
+    assert_eq!(
+        body,
+        json!({
+            "commit_id": "abc123",
+            "event": "COMMENT",
+            "body": "Untested.\nAdd a case.",
+            "comments": [
+                { "path": "a.swift", "line": 9, "side": "RIGHT", "body": "nit" },
+                { "path": "a.swift", "line": 3, "side": "LEFT", "body": "why?" },
+            ],
+        })
     );
 }

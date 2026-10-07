@@ -28,6 +28,7 @@ USAGE:
     declutter notes [TARGET] [--json | --clear]
     declutter notes add [TARGET] [--path FILE --line N [--old]] --text TEXT
     declutter notes add [TARGET] --json FILE
+    declutter notes post [TARGET] [--yes]
 
     A pull request is fetched into refs/declutter/pr/<n>/ (no local branch is touched) and
     shown as its PR page shows it; if the remote publishes no merge ref for it, the `gh` or
@@ -44,6 +45,8 @@ USAGE:
     change as a whole. `--json` reads [{\"path\", \"line\", \"side\": \"old\"|\"new\", \"text\"}, …]
     from FILE (`-` for stdin), adding all or, if any is refused, none. A note on an
     already noted line goes under it. Drafts are never posted until opened with `m`.
+    `notes post` offers to post a pull request's notes without opening the viewer;
+    `--yes` posts without asking (drafts still stay).
 
 OPTIONS:
     --staged             Compare against the index instead of the working tree
@@ -114,6 +117,7 @@ struct Args {
     line_numbers: bool,
     clear: bool,
     json: bool,
+    yes: bool,
     note: NoteFlags,
     syntax: bool,
 }
@@ -128,6 +132,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
         line_numbers: false,
         clear: false,
         json: false,
+        yes: false,
         note: NoteFlags::default(),
         syntax: true,
     };
@@ -163,6 +168,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
             }
             "--json" => args.json = true,
             "--old" => args.note.old = true,
+            "-y" | "--yes" => args.yes = true,
             "--path" | "--text" => {
                 let Some(value) = inline.or_else(|| raw.next()) else {
                     bail!("{flag} needs a value");
@@ -226,6 +232,12 @@ fn run() -> Result<()> {
     if args.note.any() {
         bail!("--path, --line, --old and --text only apply to `declutter notes add`");
     }
+    if subcommand(&["notes", "post"]) {
+        return post_notes(&dir, &args.positionals[2..], &args);
+    }
+    if args.yes {
+        bail!("--yes only applies to `declutter notes post`");
+    }
     if subcommand(&["notes"]) {
         return list_notes(&dir, &args.positionals[1..], &args);
     }
@@ -271,6 +283,7 @@ fn run() -> Result<()> {
             &mut notes,
             pr,
             &poster,
+            false,
             &mut std::io::stdin().lock(),
             &mut std::io::stdout(),
         )?;
@@ -307,6 +320,32 @@ fn list_notes(dir: &Path, positionals: &[String], args: &Args) -> Result<()> {
         print!("{}", notes.prompt());
     }
     Ok(())
+}
+
+/// `declutter notes post`: the end-of-review offer to post, without the review.
+fn post_notes(dir: &Path, positionals: &[String], args: &Args) -> Result<()> {
+    let target = target(dir, positionals, args)?;
+    let Some(pr) = &target.pr else {
+        bail!(
+            "{} is not a pull request; `notes post` takes a PR URL or `pr <number>`",
+            target.label
+        );
+    };
+    let mut notes = NoteStore::open(dir).scoped(target.review_key());
+    if notes.notes().is_empty() {
+        println!("No notes to post in {}.", target.label);
+        return Ok(());
+    }
+    offer_upload(
+        &mut notes,
+        pr,
+        &CliPoster {
+            dir: dir.to_path_buf(),
+        },
+        args.yes,
+        &mut std::io::stdin().lock(),
+        &mut std::io::stdout(),
+    )
 }
 
 /// `declutter notes add`: draft notes from outside the viewer, all or none.
