@@ -5,7 +5,9 @@
 //!   writes each frame as an SVG to `docs/images/`, so the screenshots are reproducible
 //!   and always match the current UI;
 //! - `cargo run --example demo -- repo <dir>` creates a git repository at `<dir>` with
-//!   the change on a `feature/cart-discount` branch, for recording `docs/demo.tape`.
+//!   the change on a `feature/cart-discount` branch, for recording `docs/demo.tape`;
+//! - `cargo run --example demo -- pr <dir>` stages the change as pull request 42 of a
+//!   pretend `github.com/acme/shop`, served from a local repository, for `docs/pr.tape`.
 
 use std::fmt::Write;
 use std::fs;
@@ -127,10 +129,29 @@ fn main() -> std::io::Result<()> {
     match args.as_slice() {
         [] => screenshots(),
         [command, dir] if command == "repo" => repo(Path::new(dir)),
+        [command, dir] if command == "pr" => pull_request(Path::new(dir)),
         _ => {
-            eprintln!("usage: cargo run --example demo [-- repo <dir>]");
+            eprintln!("usage: cargo run --example demo [-- repo <dir> | -- pr <dir>]");
             std::process::exit(2);
         }
+    }
+}
+
+/// Runs git in `dir` as a demo author.
+fn git(dir: &Path, args: &[&str]) -> std::io::Result<()> {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "Demo")
+        .env("GIT_AUTHOR_EMAIL", "demo@example.com")
+        .env("GIT_COMMITTER_NAME", "Demo")
+        .env("GIT_COMMITTER_EMAIL", "demo@example.com")
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!("git {args:?} failed")))
     }
 }
 
@@ -141,34 +162,86 @@ fn repo(dir: &Path) -> std::io::Result<()> {
         fs::remove_dir_all(dir)?;
     }
     fs::create_dir_all(dir.join("src"))?;
-    let git = |args: &[&str]| -> std::io::Result<()> {
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .env("GIT_AUTHOR_NAME", "Demo")
-            .env("GIT_AUTHOR_EMAIL", "demo@example.com")
-            .env("GIT_COMMITTER_NAME", "Demo")
-            .env("GIT_COMMITTER_EMAIL", "demo@example.com")
-            .status()?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(std::io::Error::other(format!("git {args:?} failed")))
-        }
-    };
-    git(&["init", "-q", "-b", "main"])?;
+    git(dir, &["init", "-q", "-b", "main"])?;
     fs::write(dir.join("src/cart.ts"), OLD_CART)?;
     fs::write(dir.join("src/format.ts"), OLD_FORMAT)?;
-    git(&["add", "."])?;
-    git(&["commit", "-q", "-m", "Add the cart"])?;
-    git(&["checkout", "-q", "-b", "feature/cart-discount"])?;
+    git(dir, &["add", "."])?;
+    git(dir, &["commit", "-q", "-m", "Add the cart"])?;
+    git(dir, &["checkout", "-q", "-b", "feature/cart-discount"])?;
     fs::write(dir.join("src/cart.ts"), NEW_CART)?;
     fs::write(dir.join("src/cart.test.ts"), NEW_TEST)?;
     fs::write(dir.join("src/format.ts"), NEW_FORMAT)?;
-    git(&["add", "."])?;
-    git(&["commit", "-q", "-m", "Support a discount on the cart total"])?;
+    git(dir, &["add", "."])?;
+    git(
+        dir,
+        &["commit", "-q", "-m", "Support a discount on the cart total"],
+    )?;
     println!("demo repository ready at {}", dir.display());
+    Ok(())
+}
+
+const PRETEND_URL: &str = "https://github.com/acme/shop.git";
+
+/// Pull request 42 of a pretend `github.com/acme/shop`, without the network:
+///
+/// - `<dir>/upstream` plays GitHub: `main`, plus the PR published as
+///   `refs/pull/42/merge`, the way GitHub publishes an open PR;
+/// - `<dir>/shop` is your clone, whose `origin` is the GitHub URL, rewritten by
+///   `insteadOf` to the local upstream;
+/// - `<dir>/bin/gh` stands in for the GitHub CLI, so posting the notes at the end
+///   succeeds without sending anything anywhere.
+fn pull_request(dir: &Path) -> std::io::Result<()> {
+    if dir.exists() {
+        fs::remove_dir_all(dir)?;
+    }
+    let upstream = dir.join("upstream");
+    repo(&upstream)?;
+    git(&upstream, &["checkout", "-q", "main"])?;
+    git(
+        &upstream,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "Merge pull request #42",
+            "feature/cart-discount",
+        ],
+    )?;
+    git(&upstream, &["update-ref", "refs/pull/42/merge", "HEAD"])?;
+    git(&upstream, &["reset", "-q", "--hard", "HEAD~1"])?;
+
+    let clone = dir.join("shop");
+    let instead_of = format!(
+        "url.file://{}.insteadOf",
+        fs::canonicalize(&upstream)?.display()
+    );
+    git(
+        dir,
+        &[
+            "-c",
+            &format!("{instead_of}={PRETEND_URL}"),
+            "clone",
+            "-q",
+            PRETEND_URL,
+            "shop",
+        ],
+    )?;
+    git(&clone, &["config", &instead_of, PRETEND_URL])?;
+
+    let bin = dir.join("bin");
+    fs::create_dir_all(&bin)?;
+    let gh = bin.join("gh");
+    fs::write(
+        &gh,
+        "#!/bin/sh\n# Stands in for the GitHub CLI in the demo: accepts and sends nothing.\nexit 0\n",
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755))?;
+    }
+    println!("demo pull request ready in {}", clone.display());
     Ok(())
 }
 

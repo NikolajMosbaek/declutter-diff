@@ -46,7 +46,43 @@ Comments only (`C`) — check what the AI claims its code does, on its own:
 ![The key help over the viewer](https://raw.githubusercontent.com/NikolajMosbaek/declutter-diff/main/docs/images/keys.svg)
 
 The pictures are drawn by the viewer itself: `cargo run --example demo` regenerates them in
-`docs/images/`, and `vhs docs/demo.tape` records the animation.
+`docs/images/`, and `vhs docs/demo.tape` / `vhs docs/pr.tape` record the animations.
+
+## Review pull requests in one line
+
+Copy the pull request's URL from the browser and hand it to `declutter`:
+
+```sh
+declutter https://github.com/acme/shop/pull/42
+declutter https://dev.azure.com/contoso/Mobile/_git/shop/pullrequest/1234
+declutter pr 42                  # just the number, for the repository you're in
+```
+
+That's the whole setup. `declutter` fetches the PR — no branch to check out, nothing of
+yours touched — and shows exactly the diff the PR page shows, layers and all. Leave notes
+with `m` as you go; when you quit, it lists them and asks:
+
+```
+You left 1 note in this review:
+  `src/cart.ts:13`  Should a 100% discount be allowed?
+Post 1 comment to PR 42? [y/N] y
+Posted 1 comment to PR 42.
+```
+
+Each note lands on its line in the PR, as you:
+
+![Opening a pull request by URL, leaving a note, and posting it when quitting](https://raw.githubusercontent.com/NikolajMosbaek/declutter-diff/main/docs/images/pr.gif)
+
+<sub>The recording uses a pretend `acme/shop` served from a local repository — see
+`docs/pr.tape`.</sub>
+
+| | GitHub | Azure DevOps |
+|---|---|---|
+| Open a PR | your normal git access to the repository | your normal git access to the repository |
+| Post your notes | the `gh` CLI, signed in (`gh auth login`) | the `az` CLI, signed in (`az login`) |
+| A note becomes | a review comment on the line (on the file, if the line is outside GitHub's diff) | a comment thread on the line |
+
+Nothing is posted unless you answer `y`; notes you don't post are kept for next time.
 
 ## Layers
 
