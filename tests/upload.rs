@@ -258,7 +258,10 @@ fn drafts_are_held_back_until_opened() {
     let out = answer(&mut store, &poster, "y\n");
 
     assert!(out.contains("Post 1 comment to PR 42? [y/N]"), "{out}");
-    assert!(out.contains("2 draft notes not opened — kept"), "{out}");
+    assert!(
+        out.contains("2 draft notes not opened — kept: the change as a whole (P), `a.swift:5`"),
+        "{out}"
+    );
     assert_eq!(poster.posted.borrow().as_slice(), ["rename"]);
     assert_eq!(store.notes().len(), 2);
 

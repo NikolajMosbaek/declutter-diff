@@ -1251,8 +1251,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let width = diff_area.width.saturating_sub(4) as usize;
         let rows = wrap(&with_cursor(text, app.input_cursor), width);
         let height = (rows.len() as u16 + 2).min(diff_area.height);
+        // Right under the cursor's line, where the eye already is — over the note being
+        // edited — else above it, else at the bottom of the pane.
+        let top = diff_area.y + 1;
+        let bottom = diff_area.bottom().saturating_sub(1);
+        let line = top + app.cursor.saturating_sub(app.scroll).min(u16::MAX as usize) as u16;
+        let y = if line + 1 + height <= bottom + 1 {
+            line + 1
+        } else if line >= top + height {
+            line - height
+        } else {
+            diff_area.bottom().saturating_sub(height)
+        };
         let area = Rect {
-            y: diff_area.bottom().saturating_sub(height),
+            y,
             height,
             ..diff_area
         };

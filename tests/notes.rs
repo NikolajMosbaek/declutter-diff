@@ -419,3 +419,66 @@ fn shift_p_notes_the_change_as_a_whole() {
     assert_eq!(general.text, "No test covers the new rate. Add one.");
     assert!(!general.draft);
 }
+
+/// Ten lines with the third changed, and a draft on it.
+fn tall_app() -> App {
+    let old: String = (1..=10).map(|n| format!("let v{n} = {n}\n")).collect();
+    let new = old.replace("let v3 = 3", "let v3 = 30");
+    let file = FileReview::new(FileChange {
+        path: "a.swift".to_string(),
+        old_path: None,
+        status: ChangeStatus::Modified,
+        old: Some(old),
+        new: Some(new),
+        binary: false,
+    });
+    let mut notes = NoteStore::in_memory();
+    notes
+        .add(draft("a.swift", 3, "The code reads the same without it."))
+        .expect("add");
+    App::with_stores(
+        vec![file],
+        Layers::default(),
+        declutter::store::ReviewStore::in_memory(),
+        notes,
+    )
+}
+
+#[test]
+fn opening_a_draft_and_pressing_enter_keeps_its_text_exactly() {
+    let mut app = tall_app();
+    for code in [
+        KeyCode::Right,
+        KeyCode::Down,
+        KeyCode::Char('m'),
+        KeyCode::Enter,
+    ] {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    let note = app.notes.find("a.swift", NoteSide::New, 3).expect("note");
+    assert_eq!(note.text, "The code reads the same without it.");
+    assert!(!note.draft);
+}
+
+#[test]
+fn the_note_editor_opens_under_the_line_not_at_the_bottom_of_the_pane() {
+    let mut app = tall_app();
+    for code in [KeyCode::Right, KeyCode::Down, KeyCode::Char('m')] {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    let rows: Vec<String> = screen(&mut app, 120, 40)
+        .lines()
+        .map(String::from)
+        .collect();
+    let line = rows
+        .iter()
+        .position(|row| row.contains("3 + let v3 = 30"))
+        .expect("the noted line");
+    assert!(
+        rows[line + 1].contains("Note on a.swift:3"),
+        "the editor is right under the line it is about:\n{}",
+        rows.join("\n")
+    );
+}

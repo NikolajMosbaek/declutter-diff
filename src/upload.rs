@@ -322,10 +322,17 @@ pub fn offer_upload(
         .into_iter()
         .cloned()
         .partition(|note| note.draft);
+    let places: Vec<String> = drafts
+        .iter()
+        .map(|note| match note.is_general() {
+            true => format!("{} (P)", note.place()),
+            false => note.place(),
+        })
+        .collect();
     let held = match drafts.len() {
         0 => String::new(),
-        1 => "1 draft note not opened — kept".to_string(),
-        n => format!("{n} draft notes not opened — kept"),
+        1 => format!("1 draft note not opened — kept: {}", places.join(", ")),
+        n => format!("{n} draft notes not opened — kept: {}", places.join(", ")),
     };
     if notes.is_empty() {
         if !drafts.is_empty() {
