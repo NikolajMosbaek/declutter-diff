@@ -1219,7 +1219,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         ),
         (None, Some(message)) => message.clone(),
         (None, None) => format!(
-            "{} · {reviewed}/{listed} reviewed{}",
+            "{}{} · {reviewed}/{listed} reviewed{}",
+            drafts_status(&app.notes),
             Summary::new(&app.files, app.layers).status_line(app.layers),
             notes_status(&app.notes)
                 + &match (app.moved_blocks(), app.collapse_moves) {
@@ -1341,20 +1342,37 @@ fn with_cursor(text: &str, cursor: usize) -> String {
     format!("{}█{}", &text[..at], &text[at..])
 }
 
-/// " · 3 notes (2 drafts)", and a pointer to a draft note on the whole change.
+/// " · 3 notes", for the end of the status line.
 fn notes_status(notes: &NoteStore) -> String {
-    let all = notes.notes();
-    let plural = |n: usize| if n == 1 { "" } else { "s" };
-    let drafts = all.iter().filter(|note| note.draft).count();
-    let mut status = match (all.len(), drafts) {
-        (0, _) => String::new(),
-        (n, 0) => format!(" · {n} note{}", plural(n)),
-        (n, d) => format!(" · {n} note{} ({d} draft{})", plural(n), plural(d)),
-    };
-    if notes.general().is_some_and(|note| note.draft) {
-        status.push_str(" · P: draft on the whole change");
+    match notes.notes().len() {
+        0 => String::new(),
+        n => format!(" · {n} note{}", if n == 1 { "" } else { "s" }),
     }
-    status
+}
+
+/// "✎ 2 drafts to read — m on a line, P for the whole change · ", for the start of the
+/// status line: drafts are never posted until opened, so they must not go unnoticed
+/// where a narrow terminal cuts the line short.
+fn drafts_status(notes: &NoteStore) -> String {
+    let drafts: Vec<&Note> = notes
+        .notes()
+        .into_iter()
+        .filter(|note| note.draft)
+        .collect();
+    let general = drafts.iter().any(|note| note.is_general());
+    let on_lines = drafts.len() - usize::from(general);
+    let keys = match (on_lines, general) {
+        (0, false) => return String::new(),
+        (0, true) => "P for the whole change",
+        (1, false) => "m on its line",
+        (_, false) => "m on each line",
+        (_, true) => "m on a line, P for the whole change",
+    };
+    let count = drafts.len();
+    format!(
+        "✎ {count} draft{} to read — {keys} · ",
+        if count == 1 { "" } else { "s" }
+    )
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {

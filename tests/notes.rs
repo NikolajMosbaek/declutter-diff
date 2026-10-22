@@ -344,7 +344,10 @@ fn a_draft_shows_as_one_until_opened_and_keeps_its_lines() {
         shown.contains("rate.ts (1) ✎1"),
         "the file list marks noted files: {shown}"
     );
-    assert!(shown.contains("1 note (1 draft)"), "{shown}");
+    assert!(
+        shown.contains(" ✎ 1 draft to read — m on its line ·"),
+        "{shown}"
+    );
 
     app.handle_key(key(KeyCode::Right));
     app.handle_key(key(KeyCode::Down));
@@ -402,8 +405,11 @@ fn shift_p_notes_the_change_as_a_whole() {
     let mut app = rate_app(notes);
     let key = |code| KeyEvent::from(code);
 
-    let shown = screen(&mut app, 150, 16);
-    assert!(shown.contains("P: draft on the whole change"), "{shown}");
+    let shown = screen(&mut app, 80, 16);
+    assert!(
+        shown.contains(" ✎ 1 draft to read — P for the whole change ·"),
+        "first in the status line, so even a narrow terminal shows it: {shown}"
+    );
 
     app.handle_key(key(KeyCode::Char('P')));
     assert!(

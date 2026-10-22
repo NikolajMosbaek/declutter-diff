@@ -104,6 +104,8 @@ A note has to sit on a line of the diff (the error says which lines are); `--jso
 all of its notes or, if any is refused, none. A second note on a line goes under the
 first. These notes are **drafts**: marked as such in the viewer and never posted until you
 open one with `m` (or `P`) and press Enter — edited or not. Emptying a note deletes it.
+While any are left, the status line starts with them (`✎ 2 drafts to read — m on a line,
+P for the whole change`), and the editor opens right under the note it edits.
 
 Afterwards, `declutter notes pr 42 --json` shows what is still pending and what was posted,
 with a link to each comment, so the agent can see which findings you kept.
