@@ -96,7 +96,8 @@ or drop before anything is posted:
 
 ```sh
 declutter notes add pr 42 --path src/cart.ts --line 13 --text "A 100% discount is allowed"
-declutter notes add pr 42 --json findings.json   # [{"path", "line", "side": "old", "text"}, …]
+declutter notes add pr 42 --path src/cart.ts --line 11-13 --text "This whole branch is dead"
+declutter notes add pr 42 --json findings.json   # [{"path", "line", "end_line", "side": "old", "text"}, …]
 declutter notes add pr 42 --text "Nothing tests the new branch"   # on the PR, not a line
 ```
 

@@ -270,3 +270,32 @@ fn notes_add_refuses_every_bad_entry_and_adds_none() {
     assert!(err.contains("no notes were added"), "{err}");
     assert_eq!(listed(dir.path(), &[])["notes"], json!([]));
 }
+
+#[test]
+fn notes_add_takes_a_range_of_lines() {
+    let dir = repo();
+    let (ok, out, err) = declutter(dir.path(),
+        &["notes", "add", "feature", "--path", "src/rate.ts", "--line", "12-14", "--text", "Three lines."], None);
+    assert!(ok, "{err}");
+    assert_eq!(out, "Added 1 draft note to main...feature.\n");
+
+    let (ok, out, err) = declutter(dir.path(), &["notes", "add", "feature", "--json", "-"],
+        Some(r#"[{"path": "src/rate.ts", "line": 12, "end_line": 14, "text": "Same lines."}]"#));
+    assert!(ok, "{err}");
+    assert_eq!(out, "Added 1 draft note to main...feature (1 under a note already on its line).\n");
+
+    let notes = listed(dir.path(), &["feature"])["notes"].clone();
+    assert_eq!(notes.as_array().map(Vec::len), Some(1));
+    assert_eq!((&notes[0]["line"], &notes[0]["end_line"]), (&json!(12), &json!(14)));
+
+    let (ok, _, err) = declutter(dir.path(),
+        &["notes", "add", "feature", "--path", "src/rate.ts", "--line", "15–15", "--text", "One."], None);
+    assert!(ok, "{err}");
+    assert!(listed(dir.path(), &["feature"])["notes"][1].get("end_line").is_none(),
+        "a one-line range is a line note");
+
+    let (ok, _, err) = declutter(dir.path(),
+        &["notes", "add", "--path", "src/rate.ts", "--line", "12-", "--text", "x"], None);
+    assert!(!ok);
+    assert!(err.contains("--line needs a line number, or a range such as 11-13"), "{err}");
+}

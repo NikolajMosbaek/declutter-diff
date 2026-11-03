@@ -26,7 +26,7 @@ USAGE:
     declutter [OPTIONS] <A..B | A...B>    as in git diff
     declutter [OPTIONS] <REVISION>        a revision vs the working tree
     declutter notes [TARGET] [--json | --clear]
-    declutter notes add [TARGET] [--path FILE --line N [--old]] --text TEXT
+    declutter notes add [TARGET] [--path FILE --line N[-M] [--old]] --text TEXT
     declutter notes add [TARGET] --json FILE
     declutter notes post [TARGET] [--yes]
 
@@ -42,7 +42,8 @@ USAGE:
 
     `notes add` adds draft notes from outside the viewer, e.g. from a coding agent: on a
     line of the diff (`--old` for a removed line), or, without --path and --line, on the
-    change as a whole. `--json` reads [{\"path\", \"line\", \"side\": \"old\"|\"new\", \"text\"}, …]
+    change as a whole. `--line 11-13` notes a block of lines. `--json` reads
+    [{\"path\", \"line\", \"end_line\", \"side\": \"old\"|\"new\", \"text\"}, …] (\"end_line\" is optional)
     from FILE (`-` for stdin), adding all or, if any is refused, none. A note on an
     already noted line goes under it. Drafts are never posted until opened with `m`.
     `notes post` offers to post a pull request's notes without opening the viewer;
@@ -84,6 +85,7 @@ KEYS (viewer; press ? for the full list):
 struct NoteFlags {
     path: Option<String>,
     line: Option<usize>,
+    end_line: Option<usize>,
     old: bool,
     text: Option<String>,
     json_file: Option<String>,
@@ -93,6 +95,7 @@ impl NoteFlags {
     fn any(&self) -> bool {
         self.path.is_some()
             || self.line.is_some()
+            || self.end_line.is_some()
             || self.old
             || self.text.is_some()
             || self.json_file.is_some()
@@ -104,6 +107,8 @@ impl NoteFlags {
 struct NoteEntry {
     path: Option<String>,
     line: Option<usize>,
+    #[serde(default)]
+    end_line: Option<usize>,
     side: Option<NoteSide>,
     text: String,
 }
@@ -180,10 +185,17 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
             }
             "--line" => {
                 let value = inline.or_else(|| raw.next()).unwrap_or_default();
-                let Ok(line) = value.parse::<usize>() else {
-                    bail!("--line needs a line number");
+                let numbers: Option<Vec<usize>> = value
+                    .split(['-', '–'])
+                    .map(|part| part.parse().ok())
+                    .collect();
+                let (first, last) = match numbers.as_deref() {
+                    Some(&[first]) => (first, None),
+                    Some(&[first, last]) => (first, Some(last)),
+                    _ => bail!("--line needs a line number, or a range such as 11-13"),
                 };
-                args.note.line = Some(line);
+                args.note.line = Some(first);
+                args.note.end_line = last;
             }
             "--no-syntax" => args.syntax = false,
             "--base" => {
@@ -366,7 +378,7 @@ fn add_notes(dir: &Path, positionals: &[String], args: &Args) -> Result<()> {
                 std::fs::read_to_string(file).with_context(|| format!("reading {file}"))?
             };
             serde_json::from_str(&text).context(
-                r#"--json expects [{"path": …, "line": …, "side": "old"|"new", "text": …}, …]"#,
+                r#"--json expects [{"path": …, "line": …, "end_line": …, "side": "old"|"new", "text": …}, …]"#,
             )?
         }
         None => {
@@ -376,6 +388,7 @@ fn add_notes(dir: &Path, positionals: &[String], args: &Args) -> Result<()> {
             vec![NoteEntry {
                 path: flags.path.clone(),
                 line: flags.line,
+                end_line: flags.end_line,
                 side: flags.old.then_some(NoteSide::Old),
                 text,
             }]
@@ -396,11 +409,12 @@ fn add_notes(dir: &Path, positionals: &[String], args: &Args) -> Result<()> {
         let note = match (entry.path, entry.line) {
             _ if entry.text.trim().is_empty() => Err(anyhow!("the text is empty")),
             (None, None) => Ok(Note::on_pull_request(entry.text.trim())),
-            (Some(path), Some(line)) => Note::on_line(
+            (Some(path), Some(line)) => Note::on_block(
                 &files,
                 &path,
                 entry.side.unwrap_or(NoteSide::New),
                 line,
+                entry.end_line.unwrap_or(line),
                 entry.text,
             ),
             _ => Err(anyhow!(
