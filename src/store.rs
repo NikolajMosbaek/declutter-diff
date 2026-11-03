@@ -108,13 +108,29 @@ pub enum NoteSide {
     New,
 }
 
-/// A reviewer's note on one line of a change, or — with an empty path — on the change
-/// as a whole.
+/// One end of a note's range: a line number on one side of the file.
+pub type End = (NoteSide, usize);
+
+/// A reviewer's note on one line of a change, on a block of lines, or — with an empty
+/// path — on the change as a whole. A block runs from `(side, line)` to its last end.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Note {
     pub path: String,
     pub side: NoteSide,
     pub line: usize,
+    /// The side of a block's last line, when it differs from `side`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_side: Option<NoteSide>,
+    /// The last line of a block; a note on one line has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<usize>,
+    /// The removed lines a block covers (first, last), set only when the block takes in
+    /// removed rows along with others, so each side keeps its own span.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_lines: Option<(usize, usize)>,
+    /// The other lines a block covers (first, last); set with `old_lines`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_lines: Option<(usize, usize)>,
     /// The line the note is about, so the note still makes sense once lines move.
     pub code: String,
     pub text: String,
@@ -223,9 +239,31 @@ impl NoteStore {
         Some(self.path.as_ref()?.with_file_name("review-notes.md"))
     }
 
+    /// The note on exactly this one line; a block that starts here is not it.
     pub fn find(&self, path: &str, side: NoteSide, line: usize) -> Option<&Note> {
+        self.find_block(path, (side, line), (side, line))
+    }
+
+    /// The note on exactly this range, a one-line range included.
+    pub fn find_block(&self, path: &str, first: End, last: End) -> Option<&Note> {
         self.notes.iter().find(|note| {
-            self.in_scope(note) && note.path == path && note.side == side && note.line == line
+            self.in_scope(note) && note.path == path && note.first() == first && note.last() == last
+        })
+    }
+
+    /// The note a line belongs to: its own note, else the smallest block covering it
+    /// (the earlier one in the store, on a tie).
+    pub fn at_line(&self, path: &str, side: NoteSide, line: usize) -> Option<&Note> {
+        self.find(path, side, line).or_else(|| {
+            self.notes
+                .iter()
+                .filter(|note| {
+                    self.in_scope(note)
+                        && note.path == path
+                        && note.is_block()
+                        && note.covers(side, line)
+                })
+                .min_by_key(|note| note.size())
         })
     }
 
@@ -352,11 +390,20 @@ impl NoteStore {
             if note.is_general() {
                 out.push_str(&format!("\n{}. On the change as a whole: {text}\n", i + 1));
             } else {
+                let code = if note.is_block() {
+                    let lines: Vec<String> = note
+                        .code
+                        .lines()
+                        .map(|line| format!("   {}", line.trim_end()))
+                        .collect();
+                    lines.join("\n")
+                } else {
+                    format!("   {}", note.code.trim())
+                };
                 out.push_str(&format!(
-                    "\n{}. {}: {text}\n   ```\n   {}\n   ```\n",
+                    "\n{}. {}: {text}\n   ```\n{code}\n   ```\n",
                     i + 1,
                     note.place(),
-                    note.code.trim()
                 ));
             }
         }
@@ -378,6 +425,10 @@ impl Note {
             path: String::new(),
             side: NoteSide::New,
             line: 0,
+            end_side: None,
+            end_line: None,
+            old_lines: None,
+            new_lines: None,
             code: String::new(),
             text: text.into(),
             review: None,
@@ -430,6 +481,10 @@ impl Note {
             path: path.to_string(),
             side,
             line,
+            end_side: None,
+            end_line: None,
+            old_lines: None,
+            new_lines: None,
             code: code.to_string(),
             text: text.into().trim().to_string(),
             review: None,
@@ -444,19 +499,116 @@ impl Note {
     fn same_place(&self, other: &Note) -> bool {
         self.review == other.review
             && self.path == other.path
-            && self.side == other.side
-            && self.line == other.line
+            && self.first() == other.first()
+            && self.last() == other.last()
     }
 
-    /// "`Cart.swift:12`", or "`Cart.swift` (removed line 12)".
+    /// Where the note starts.
+    pub fn first(&self) -> End {
+        (self.side, self.line)
+    }
+
+    /// Where the note ends; the same as `first` for a note on one line.
+    pub fn last(&self) -> End {
+        (
+            self.end_side.unwrap_or(self.side),
+            self.end_line.unwrap_or(self.line),
+        )
+    }
+
+    /// Whether the note covers several lines.
+    pub fn is_block(&self) -> bool {
+        self.end_line.is_some()
+    }
+
+    /// The first and last line the note covers on `side`, if it covers any there.
+    pub fn span(&self, side: NoteSide) -> Option<(usize, usize)> {
+        let stored = match side {
+            NoteSide::Old => self.old_lines,
+            NoteSide::New => self.new_lines,
+        };
+        stored.or_else(|| {
+            (side == self.side).then(|| (self.line, self.end_line.unwrap_or(self.line)))
+        })
+    }
+
+    /// Whether `line` of `side` is one of the lines the note covers.
+    pub fn covers(&self, side: NoteSide, line: usize) -> bool {
+        self.span(side)
+            .is_some_and(|(first, last)| (first..=last).contains(&line))
+    }
+
+    /// How many lines the note covers, across both sides.
+    pub fn size(&self) -> usize {
+        [NoteSide::Old, NoteSide::New]
+            .into_iter()
+            .filter_map(|side| self.span(side))
+            .map(|(first, last)| last + 1 - first)
+            .sum()
+    }
+
+    /// The note's lines as they read in the diff: "11–13", "removed 11–13", "removed 3
+    /// to 8" when a block runs from removed lines into others. Empty for a line note.
+    pub fn label(&self) -> String {
+        if !self.is_block() {
+            return String::new();
+        }
+        let (first, last) = (self.first(), self.last());
+        let removed = |end: End| match end.0 {
+            NoteSide::Old => format!("removed {}", end.1),
+            NoteSide::New => end.1.to_string(),
+        };
+        if first.0 != last.0 {
+            return format!("{} to {}", removed(first), last.1);
+        }
+        match first.0 {
+            NoteSide::Old => format!("removed {}–{}", first.1, last.1),
+            NoteSide::New => format!("{}–{}", first.1, last.1),
+        }
+    }
+
+    /// "Line 9", "Removed line 9", "Lines 11–13", "Removed line 3 to line 8".
+    pub fn lines_text(&self) -> String {
+        let words = self.words();
+        let mut chars = words.chars();
+        chars
+            .next()
+            .map(|c| c.to_uppercase().chain(chars).collect())
+            .unwrap_or_default()
+    }
+
+    /// `lines_text` in lower case, to follow a path.
+    fn words(&self) -> String {
+        let (first, last) = (self.first(), self.last());
+        let one = |end: End| match end.0 {
+            NoteSide::Old => format!("removed line {}", end.1),
+            NoteSide::New => format!("line {}", end.1),
+        };
+        if !self.is_block() {
+            return one(first);
+        }
+        if first.0 != last.0 {
+            return format!("{} to line {}", one(first), last.1);
+        }
+        match first.0 {
+            NoteSide::Old => format!("removed lines {}–{}", first.1, last.1),
+            NoteSide::New => format!("lines {}–{}", first.1, last.1),
+        }
+    }
+
+    /// "`Cart.swift:12`", "`Cart.swift:11–13`", or "`Cart.swift` (removed line 12)".
     pub fn place(&self) -> String {
         if self.is_general() {
             return "the change as a whole".to_string();
         }
-        match self.side {
-            NoteSide::New => format!("`{}:{}`", self.path, self.line),
-            NoteSide::Old => format!("`{}` (removed line {})", self.path, self.line),
+        if self.first().0 == NoteSide::New && self.last().0 == NoteSide::New {
+            let range = match self.end_line {
+                Some(end) => format!("{}–{end}", self.line),
+                None => self.line.to_string(),
+            };
+            return format!("`{}:{range}`", self.path);
         }
+        format!("`{}` ({})", self.path, self.words())
     }
 }
 
