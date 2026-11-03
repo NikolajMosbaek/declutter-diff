@@ -1,4 +1,19 @@
+use declutter::review::{ChangeStatus, FileChange, FileReview};
 use declutter::store::{Added, End, Note, NoteSide, NoteSide::*, NoteStore};
+
+const OLD: &str = "export function applyDiscount(cart, percent) {\n  const factor = 1 - percent / 100;\n  return { ...cart, total: cart.total * factor };\n}\n";
+const NEW: &str = "export function applyDiscount(cart, percent) {\n  if (percent < 0 || percent > 100) {\n    // A discount outside 0-100 is a bug upstream.\n    throw new RangeError(\"percent must be 0-100\");\n  }\n  const factor = 1 - percent / 100;\n  const total = Math.round(cart.total * factor * 100) / 100;\n  return { ...cart, total };\n}\n";
+
+fn cart() -> FileReview {
+    FileReview::new(FileChange {
+        path: "cart.ts".to_string(),
+        old_path: None,
+        status: ChangeStatus::Modified,
+        old: Some(OLD.to_string()),
+        new: Some(NEW.to_string()),
+        binary: false,
+    })
+}
 
 fn block(
     first: End,
@@ -124,6 +139,12 @@ fn blocks_name_their_lines() {
             "removed 3 to 8",
             "Removed line 3 to line 8",
         ),
+        (
+            block((New, 6), (Old, 3), Some(((3, 3), (6, 6))), "t"),
+            "`a.ts` (line 6 to removed line 3)",
+            "6 to removed 3",
+            "Line 6 to removed line 3",
+        ),
     ];
     for (note, place, label, lines_text) in cases {
         assert_eq!(note.place(), place);
@@ -143,4 +164,55 @@ fn the_prompt_quotes_every_line_of_a_block() {
         "Please address these review comments. Line numbers refer to the version under review.\n\
          \n1. `a.ts:11–13`: why?\n   ```\n     if x {\n       y()\n     }\n   ```\n"
     );
+}
+
+#[test]
+fn a_block_that_ends_before_it_starts_has_no_size_to_underflow() {
+    assert_eq!(block((New, 9), (New, 5), None, "t").size(), 0);
+}
+
+#[test]
+fn a_block_from_the_viewer_quotes_lines_hidden_by_a_layer() {
+    let note = Note::block(&cart(), (NoteSide::New, 2), (NoteSide::New, 5), "x");
+    assert_eq!(note.code.lines().count(), 4);
+    assert!(note.code.contains("// A discount outside 0-100"));
+    assert!(!note.draft);
+}
+
+#[test]
+fn a_block_from_a_removed_line_into_added_ones_records_both_sides() {
+    let note = Note::block(&cart(), (NoteSide::Old, 3), (NoteSide::New, 8), "x");
+    assert_eq!(
+        (note.end_side, note.end_line),
+        (Some(NoteSide::New), Some(8))
+    );
+    assert_eq!(
+        (note.old_lines, note.new_lines),
+        (Some((3, 3)), Some((7, 8)))
+    );
+    assert_eq!(
+        note.code,
+        "-  return { ...cart, total: cart.total * factor };\n+  const total = Math.round(cart.total * factor * 100) / 100;\n+  return { ...cart, total };"
+    );
+}
+
+#[test]
+fn a_block_from_a_context_line_down_into_a_removed_one_records_both_sides() {
+    let note = Note::block(&cart(), (NoteSide::New, 6), (NoteSide::Old, 3), "x");
+    assert_eq!(
+        (note.end_side, note.end_line),
+        (Some(NoteSide::Old), Some(3))
+    );
+    assert_eq!(
+        (note.old_lines, note.new_lines),
+        (Some((3, 3)), Some((6, 6)))
+    );
+    assert_eq!(note.place(), "`cart.ts` (line 6 to removed line 3)");
+}
+
+#[test]
+fn a_block_end_outside_the_diff_quotes_the_first_ends_side() {
+    let note = Note::block(&cart(), (NoteSide::New, 8), (NoteSide::New, 40), "x");
+    assert_eq!(note.code, "  return { ...cart, total };\n}");
+    assert_eq!((note.old_lines, note.new_lines), (None, None));
 }

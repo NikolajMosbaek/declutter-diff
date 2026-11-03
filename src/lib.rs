@@ -9,6 +9,7 @@
 //! Tests are a file-level layer: a changed file is test code by path convention or
 //! by importing a test framework, and is listed or left out as a whole.
 
+pub mod block;
 pub mod classify;
 pub mod diff;
 pub mod editor;

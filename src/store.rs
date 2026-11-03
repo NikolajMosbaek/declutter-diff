@@ -4,12 +4,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::diff::RowKind;
 use crate::git::git;
-use crate::review::{DiffModes, FileReview};
+use crate::review::FileReview;
 
 /// Which changes the reviewer has marked as reviewed. A mark belongs to a file's exact
 /// change — its path and both versions — so it lapses as soon as either version moves,
@@ -446,50 +445,7 @@ impl Note {
         line: usize,
         text: impl Into<String>,
     ) -> Result<Note> {
-        let Some(file) = files.iter().find(|file| file.path == path) else {
-            bail!("`{path}` is not part of this change");
-        };
-        let view = file.view(DiffModes::SHOWN);
-        let rows = view.hunks.iter().flat_map(|hunk| &hunk.rows);
-        let lines: Vec<(usize, &str)> = rows
-            .filter_map(|row| match (side, row.kind) {
-                (NoteSide::Old, RowKind::Removed) => Some((row.old_line?, row.text.as_str())),
-                (NoteSide::New, RowKind::Added | RowKind::Context) => {
-                    Some((row.new_line?, row.text.as_str()))
-                }
-                _ => None,
-            })
-            .collect();
-        let Some((_, code)) = lines.iter().find(|(n, _)| *n == line) else {
-            let (place, which) = match side {
-                NoteSide::New => (format!("`{path}:{line}`"), "the lines"),
-                NoteSide::Old => (
-                    format!("removed line {line} of `{path}`"),
-                    "the removed lines",
-                ),
-            };
-            if lines.is_empty() {
-                bail!("{place} is not in the diff, which has no such lines");
-            }
-            let numbers: Vec<usize> = lines.iter().map(|(n, _)| *n).collect();
-            bail!(
-                "{place} is not in the diff; {which} in it are {}",
-                ranges(&numbers)
-            );
-        };
-        Ok(Note {
-            path: path.to_string(),
-            side,
-            line,
-            end_side: None,
-            end_line: None,
-            old_lines: None,
-            new_lines: None,
-            code: code.to_string(),
-            text: text.into().trim().to_string(),
-            review: None,
-            draft: true,
-        })
+        Note::on_block(files, path, side, line, line, text)
     }
 
     pub fn is_general(&self) -> bool {
@@ -543,7 +499,7 @@ impl Note {
         [NoteSide::Old, NoteSide::New]
             .into_iter()
             .filter_map(|side| self.span(side))
-            .map(|(first, last)| last + 1 - first)
+            .map(|(first, last)| last.saturating_add(1).saturating_sub(first))
             .sum()
     }
 
@@ -559,7 +515,7 @@ impl Note {
             NoteSide::New => end.1.to_string(),
         };
         if first.0 != last.0 {
-            return format!("{} to {}", removed(first), last.1);
+            return format!("{} to {}", removed(first), removed(last));
         }
         match first.0 {
             NoteSide::Old => format!("removed {}–{}", first.1, last.1),
@@ -588,7 +544,7 @@ impl Note {
             return one(first);
         }
         if first.0 != last.0 {
-            return format!("{} to line {}", one(first), last.1);
+            return format!("{} to {}", one(first), one(last));
         }
         match first.0 {
             NoteSide::Old => format!("removed lines {}–{}", first.1, last.1),
@@ -613,7 +569,7 @@ impl Note {
 }
 
 /// "3, 12–18, 40–52" for sorted line numbers.
-fn ranges(numbers: &[usize]) -> String {
+pub(crate) fn ranges(numbers: &[usize]) -> String {
     let mut sorted = numbers.to_vec();
     sorted.sort_unstable();
     sorted.dedup();

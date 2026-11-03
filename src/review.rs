@@ -270,6 +270,11 @@ impl FileReview {
         }
     }
 
+    /// The old or new version's text.
+    pub fn source(&self, old: bool) -> &str {
+        if old { &self.old } else { &self.new }
+    }
+
     pub fn view(&self, modes: impl Into<DiffModes>) -> Rc<ModeView> {
         let modes = modes.into();
         if let Some(view) = self.views.borrow().get(&modes) {

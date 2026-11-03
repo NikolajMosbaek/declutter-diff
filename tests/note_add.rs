@@ -69,6 +69,86 @@ fn a_line_outside_the_diff_is_refused_with_the_lines_that_are_in_it() {
     );
 }
 
+fn two_hunks() -> Vec<FileReview> {
+    let line = |n: usize, changed: bool| {
+        if changed {
+            format!("const v{n} = {n} * 2;\n")
+        } else {
+            format!("const v{n} = {n};\n")
+        }
+    };
+    let text =
+        |changed: &[usize]| -> String { (1..=30).map(|n| line(n, changed.contains(&n))).collect() };
+    vec![FileReview::new(FileChange {
+        path: "src/rate.ts".to_string(),
+        old_path: None,
+        status: ChangeStatus::Modified,
+        old: Some(text(&[])),
+        new: Some(text(&[5, 25])),
+        binary: false,
+    })]
+}
+
+#[test]
+fn a_block_takes_every_line_between_its_ends() {
+    let note =
+        Note::on_block(&change(), "src/rate.ts", NoteSide::New, 12, 14, "x").expect("in the diff");
+    assert_eq!(
+        (note.end_line, note.old_lines, note.new_lines),
+        (Some(14), None, None)
+    );
+    assert_eq!(
+        note.code,
+        "const v12 = 12;\nconst v13 = 13;\nconst v14 = 14;"
+    );
+    assert!(note.draft);
+}
+
+#[test]
+fn a_block_across_the_change_quotes_it_as_a_diff() {
+    let note =
+        Note::on_block(&change(), "src/rate.ts", NoteSide::New, 14, 16, "x").expect("in the diff");
+    assert_eq!(
+        (note.old_lines, note.new_lines),
+        (Some((15, 15)), Some((14, 16)))
+    );
+    assert_eq!(
+        note.code,
+        " const v14 = 14;\n-const v15 = 15;\n+const v15 = 15 * 2;\n const v16 = 16;"
+    );
+}
+
+#[test]
+fn a_one_line_block_is_a_line_note() {
+    let note = Note::on_block(&change(), "src/rate.ts", NoteSide::New, 15, 15, "x").unwrap();
+    assert_eq!(
+        (note.end_side, note.end_line, note.old_lines, note.new_lines),
+        (None, None, None, None)
+    );
+    assert_eq!(note.code, "const v15 = 15 * 2;");
+}
+
+#[test]
+fn a_block_outside_one_hunk_is_refused_with_the_lines_in_the_diff() {
+    let refused = |files: Vec<FileReview>, side, first, last| {
+        Note::on_block(&files, "src/rate.ts", side, first, last, "x")
+            .expect_err("refused")
+            .to_string()
+    };
+    assert_eq!(
+        refused(two_hunks(), NoteSide::New, 5, 25),
+        "`src/rate.ts:5–25` is not in the diff; the lines in it are 2–8, 22–28"
+    );
+    assert_eq!(
+        refused(change(), NoteSide::New, 16, 14),
+        "`src/rate.ts:16–14` ends before it starts"
+    );
+    assert_eq!(
+        refused(change(), NoteSide::Old, 15, 16),
+        "removed lines 15–16 of `src/rate.ts` are not in the diff; the removed lines in it are 15"
+    );
+}
+
 /// A repository on branch `feature`, which changes line 15 of src/rate.ts.
 fn repo() -> TempDir {
     let dir = TempDir::new().expect("temp dir");
