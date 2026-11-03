@@ -716,9 +716,19 @@ impl App {
             let Some(file) = self.current() else {
                 return;
             };
-            let note = Note {
-                draft: false,
-                ..Note::block(file, self.layers, first, last, text)
+            // A note already on this range keeps the lines it was made with: built again
+            // under other layers, a block picked in a decluttered view could come out
+            // narrower.
+            let note = match self.notes.find_block(&file.path, first, last) {
+                Some(existing) => Note {
+                    text: text.trim().to_string(),
+                    draft: false,
+                    ..existing.clone()
+                },
+                None => Note {
+                    draft: false,
+                    ..Note::block(file, self.layers, first, last, text)
+                },
             };
             if let Err(error) = self.notes.set(note) {
                 self.message = Some(format!("could not save the note: {error:#}"));

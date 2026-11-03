@@ -971,3 +971,32 @@ fn a_selection_up_onto_a_note_line_highlights_the_row_the_note_sits_under() {
         Some("block")
     );
 }
+
+#[test]
+fn a_block_saved_as_selected_keeps_its_lines_when_reopened_with_every_layer_shown() {
+    let old = "const a = 1;\nconst x = 1;\n// note\nconst b = 1;\nconst c = 1;\nconst d = 1;\nconst e = 1;\n";
+    let new = "const a = 1;\nconst x = 2;\n// note\nconst b = 1;\nconst c = 1;\nconst d = 1;\nconst e = 1;\n";
+    let mut app = p_app(old, new);
+    press(&mut app, &[v(), KeyCode::Char('G')]);
+    type_note(&mut app, "probe");
+    let saved = app.notes.notes()[0].clone();
+    press(
+        &mut app,
+        &[KeyCode::Char('a'), KeyCode::Char('g'), j(), j()],
+    );
+    assert!(pane(&mut app)[2].contains("2       -▎const x = 1"));
+    press(
+        &mut app,
+        &[KeyCode::Char('m'), KeyCode::Char('!'), KeyCode::Enter],
+    );
+    let all = app.notes.notes();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].text, "probe!");
+    assert_eq!(
+        Note {
+            text: "probe".into(),
+            ..all[0].clone()
+        },
+        saved
+    );
+}
