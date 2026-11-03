@@ -1313,22 +1313,23 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     );
     frame.render_widget(Paragraph::new(HELP).dim(), help);
     if let Some(Input::Note(text) | Input::General(text)) = &app.input {
+        let block_title = if let Some((first, last)) = app.editing.filter(|(a, b)| a != b)
+            && let Some(file) = app.current()
+        {
+            let place = Note::block(file, first, last, "").place();
+            Some(format!(" Note on {} ", place.replace('`', "")))
+        } else {
+            None
+        };
         let title = match &app.input {
             Some(Input::General(_)) => " Note on the change as a whole ".to_string(),
-            _ => match app.cursor_anchor() {
-                Some((_, _))
-                    if let Some((first, last)) =
-                        app.editing.filter(|(first, last)| first != last)
-                        && let Some(file) = app.current() =>
-                {
-                    let place = Note::block(file, first, last, "").place();
-                    format!(" Note on {} ", place.replace('`', ""))
-                }
-                Some((path, anchor)) if anchor.side == NoteSide::Old => {
+            _ => match (block_title, app.cursor_anchor()) {
+                (Some(title), Some(_)) => title,
+                (_, Some((path, anchor))) if anchor.side == NoteSide::Old => {
                     format!(" Note on {path}, removed line {} ", anchor.line)
                 }
-                Some((path, anchor)) => format!(" Note on {path}:{} ", anchor.line),
-                None => " Note ".to_string(),
+                (_, Some((path, anchor))) => format!(" Note on {path}:{} ", anchor.line),
+                (_, None) => " Note ".to_string(),
             },
         };
         let width = diff_area.width.saturating_sub(4) as usize;
