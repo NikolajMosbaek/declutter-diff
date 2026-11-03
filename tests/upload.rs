@@ -1,13 +1,13 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use anyhow::{Result, bail};
 use declutter::pr::{PullRequest, Repo};
 use declutter::store::{End, Link, Note, NoteSide, NoteStore};
 use declutter::upload::{
     Poster, azure_link, azure_thread, azure_thread_right_only, github_comment, github_review,
-    offer_upload,
+    offer_upload, post_azure_thread,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use tempfile::TempDir;
 
 fn azure_pr() -> PullRequest {
@@ -535,5 +535,77 @@ fn an_azure_thread_on_a_block_ending_on_a_blank_line_ends_at_offset_two() {
     assert_eq!(
         body["threadContext"]["rightFileEnd"],
         json!({ "line": 13, "offset": 2 })
+    );
+}
+
+#[test]
+fn a_mixed_block_azure_devops_refuses_is_posted_again_on_the_right_side() {
+    let sent = RefCell::new(Vec::new());
+    let link = post_azure_thread(&azure_pr(), &mixed(), |(_, body): &(String, Value)| {
+        sent.borrow_mut().push(body.clone());
+        if sent.borrow().len() == 1 {
+            bail!("both sides refused");
+        }
+        Ok(json!({ "id": 77 }))
+    })
+    .expect("posted on the right side");
+    let sent = sent.into_inner();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[0], azure_thread(&azure_pr(), &mixed()).1);
+    assert_eq!(
+        sent[1]["threadContext"],
+        json!({
+            "filePath": "/a.ts",
+            "rightFileStart": { "line": 7, "offset": 1 },
+            "rightFileEnd": { "line": 8, "offset": 12 },
+        })
+    );
+    assert_eq!(
+        link.remark.as_deref(),
+        Some("Azure DevOps highlights 7\u{2013}8 only")
+    );
+    assert_eq!(link.id, "77");
+    assert_eq!(link.url, azure_link(&azure_pr(), "77"));
+
+    let calls = Cell::new(0);
+    let link = post_azure_thread(&azure_pr(), &mixed(), |_: &(String, Value)| {
+        calls.set(calls.get() + 1);
+        Ok(json!({ "id": 78 }))
+    })
+    .expect("posted on both sides");
+    assert_eq!((calls.get(), link.remark), (1, None));
+}
+
+#[test]
+fn a_block_on_one_side_azure_devops_refuses_is_not_posted_again() {
+    let plain = block(
+        (NoteSide::New, 11),
+        (NoteSide::New, 13),
+        None,
+        "a\nb\nc",
+        "x",
+    );
+    let calls = Cell::new(0);
+    let error = post_azure_thread(&azure_pr(), &plain, |_: &(String, Value)| {
+        calls.set(calls.get() + 1);
+        bail!("refused")
+    })
+    .expect_err("refused");
+    assert_eq!(calls.get(), 1);
+    assert_eq!(format!("{error:#}"), "refused");
+}
+
+#[test]
+fn when_azure_devops_refuses_the_right_side_too_both_refusals_are_told() {
+    let error = post_azure_thread(&azure_pr(), &mixed(), |(_, body): &(String, Value)| {
+        if body["threadContext"].get("leftFileStart").is_some() {
+            bail!("both sides refused")
+        }
+        bail!("right side refused")
+    })
+    .expect_err("refused twice");
+    assert_eq!(
+        format!("{error:#}"),
+        "both sides refused; on the right side alone: right side refused"
     );
 }

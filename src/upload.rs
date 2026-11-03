@@ -30,26 +30,7 @@ impl Poster for CliPoster {
             // Azure DevOps has no batch: one thread per note.
             Repo::AzureDevOps { .. } => notes
                 .iter()
-                .map(|note| {
-                    let (thread, remark) = match azure_post(&azure_thread(pr, note)) {
-                        Ok(thread) => (thread, None),
-                        // Azure DevOps may refuse a range on the old side; the right
-                        // side alone still shows where the note is.
-                        Err(error) => match azure_thread_right_only(pr, note) {
-                            Some(narrowed) => {
-                                let thread = azure_post(&narrowed).map_err(|_| error)?;
-                                (thread, right_remark(note))
-                            }
-                            None => return Err(error),
-                        },
-                    };
-                    let id = id_of(&thread);
-                    Ok(Link {
-                        url: azure_link(pr, &id),
-                        id,
-                        remark,
-                    })
-                })
+                .map(|note| post_azure_thread(pr, note, azure_post))
                 .collect(),
             Repo::GitHub { .. } => {
                 let head = match head_commit(&self.dir, pr) {
@@ -82,6 +63,35 @@ impl Poster for CliPoster {
             }
         }
     }
+}
+
+/// Opens a thread on Azure DevOps for the note, sending each request (its URL and body)
+/// with `post`, which returns the created thread. Azure DevOps may refuse a block that
+/// takes in removed lines along with others; it is then posted again on the right side
+/// alone, which still shows where the note is, and the link carries a remark saying so;
+/// if that is refused too, the error tells both refusals.
+pub fn post_azure_thread(
+    pr: &PullRequest,
+    note: &Note,
+    post: impl Fn(&(String, Value)) -> Result<Value>,
+) -> Result<Link> {
+    let (thread, remark) = match post(&azure_thread(pr, note)) {
+        Ok(thread) => (thread, None),
+        Err(error) => match azure_thread_right_only(pr, note) {
+            Some(narrowed) => {
+                let thread = post(&narrowed)
+                    .map_err(|retry| anyhow!("{error:#}; on the right side alone: {retry:#}"))?;
+                (thread, right_remark(note))
+            }
+            None => return Err(error),
+        },
+    };
+    let id = id_of(&thread);
+    Ok(Link {
+        url: azure_link(pr, &id),
+        id,
+        remark,
+    })
 }
 
 fn azure_post((url, body): &(String, Value)) -> Result<Value> {
