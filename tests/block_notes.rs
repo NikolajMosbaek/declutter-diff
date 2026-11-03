@@ -424,27 +424,6 @@ fn esc_cancels_the_selection_and_leaving_the_file_or_a_layer_key_does_too() {
     assert_eq!(app.focus, declutter::tui::Focus::Diff);
     assert_eq!(app.cursor, 3);
 
-    let other = FileReview::new(FileChange {
-        path: "other.ts".to_string(),
-        old_path: None,
-        status: ChangeStatus::Modified,
-        old: Some("a\n".to_string()),
-        new: Some("b\n".to_string()),
-        binary: false,
-    });
-    let mut two = App::with_stores(
-        vec![cart(), other],
-        Layers::default(),
-        ReviewStore::in_memory(),
-        NoteStore::in_memory(),
-    );
-    press(&mut two, &[KeyCode::Right, v()]);
-    assert!(blocking(&mut two));
-    press(&mut two, &[KeyCode::Char('}')]);
-    assert!(!blocking(&mut two));
-    press(&mut two, &[KeyCode::Char('m'), KeyCode::Enter]);
-    assert!(two.notes.notes().iter().all(|n| n.path == "other.ts"));
-
     for cancel in [KeyCode::Tab, KeyCode::Char('c')] {
         let mut app = cart_app(NoteStore::in_memory());
         press(&mut app, &[v(), j()]);
@@ -527,4 +506,108 @@ fn v_from_the_file_list_moves_into_the_diff_and_selects() {
     press(&mut app, &[v()]);
     assert_eq!(app.focus, declutter::tui::Focus::Diff);
     assert!(screen(&mut app, 120, 20).contains("-- BLOCK  cart.ts:2 (1 line)"));
+}
+
+/// A second file whose changed rows (new lines 2–4) cover the cart's block start (New, 2).
+fn two_files() -> App {
+    let other = FileReview::new(FileChange {
+        path: "other.ts".to_string(),
+        old_path: None,
+        status: ChangeStatus::Modified,
+        old: Some("l1\nl2\nl3\nl4\nl5\n".to_string()),
+        new: Some("l1\nAA\nBB\nCC\nl5\n".to_string()),
+        binary: false,
+    });
+    let mut app = App::with_stores(
+        vec![cart(), other],
+        Layers::default(),
+        ReviewStore::in_memory(),
+        NoteStore::in_memory(),
+    );
+    press(&mut app, &[KeyCode::Right]);
+    app
+}
+
+#[test]
+fn a_selection_never_follows_the_reviewer_into_another_file() {
+    let routes: [(&str, &[KeyCode]); 4] = [
+        ("}", &[KeyCode::Char('}')]),
+        ("]", &[KeyCode::Char(']'), KeyCode::Char(']')]),
+        ("n", &[KeyCode::Char('n')]),
+        (
+            "search",
+            &[
+                KeyCode::Char('/'),
+                KeyCode::Char('B'),
+                KeyCode::Char('B'),
+                KeyCode::Enter,
+            ],
+        ),
+    ];
+    for (name, keys) in routes {
+        let mut app = two_files();
+        if name == "n" {
+            // A search made first, so that `n` has somewhere to go.
+            press(
+                &mut app,
+                &[KeyCode::Char('/'), KeyCode::Char('B'), KeyCode::Enter],
+            );
+            press(&mut app, &[KeyCode::Char('g')]);
+            press(&mut app, &[KeyCode::Char('}'), KeyCode::Char('{')]);
+        }
+        press(&mut app, &[v()]);
+        assert!(screen(&mut app, 120, 20).contains("-- BLOCK"), "{name}");
+        press(&mut app, keys);
+        assert_eq!(app.selected, 1, "{name}: did not reach the second file");
+        assert!(!screen(&mut app, 120, 20).contains("-- BLOCK"), "{name}");
+        press(&mut app, &[j()]);
+        assert!(!screen(&mut app, 120, 20).contains("-- BLOCK"), "{name}");
+        type_note(&mut app, "q");
+        assert!(
+            app.notes.notes().iter().all(|n| !n.is_block()),
+            "{name}: {:?}",
+            app.notes.notes()
+        );
+    }
+}
+
+#[test]
+fn a_message_does_not_hide_the_block_status() {
+    let mut app = cart_app(NoteStore::in_memory());
+    press(&mut app, &[v(), KeyCode::Char('n')]);
+    let text = screen(&mut app, 120, 20);
+    assert!(text.contains("-- BLOCK  cart.ts:2 (1 line)"), "{text}");
+    assert!(text.contains("press / to search"), "{text}");
+}
+
+#[test]
+fn a_one_line_selection_with_the_cursor_on_a_moved_marker_still_saves() {
+    let block = "fn validate(a: i32) -> bool {\n    a > 0\n}\nfn other() {}\n";
+    let fill = "f1\nf2\nf3\nf4\nf5\n";
+    let old = format!("k1\nk2\n{block}{fill}");
+    let new = format!("k1\nk2\n{fill}{block}");
+    let file = FileReview::new(FileChange {
+        path: "m.rs".to_string(),
+        old_path: None,
+        status: ChangeStatus::Modified,
+        old: Some(old),
+        new: Some(new),
+        binary: false,
+    });
+    let mut app = App::with_stores(
+        vec![file],
+        Layers::default(),
+        ReviewStore::in_memory(),
+        NoteStore::in_memory(),
+    );
+    press(&mut app, &[KeyCode::Right, KeyCode::Home, j(), j()]);
+    assert!(screen(&mut app, 120, 20).contains("k2"));
+    press(&mut app, &[v(), j()]);
+    let text = screen(&mut app, 120, 20);
+    assert!(text.contains("moved"), "{text}");
+    assert!(text.contains("-- BLOCK  m.rs:2 (1 line)"), "{text}");
+    type_note(&mut app, "lost?");
+    let all = app.notes.notes();
+    assert_eq!(all.len(), 1);
+    assert_eq!((all[0].first(), all[0].text.as_str()), ((New, 2), "lost?"));
 }

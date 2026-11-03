@@ -160,8 +160,9 @@ pub struct App {
     input_cursor: usize,
     /// The range the open note editor writes to: both ends the same for a line note.
     editing: Option<(End, End)>,
-    /// Where the block being selected with `V` started.
-    selection: Option<End>,
+    /// Where the block being selected with `V` started: the file's index in `files`,
+    /// and the line. It only counts while that file is the selected one.
+    selection: Option<(usize, End)>,
     /// The last search, highlighted in the diff until cleared with Esc.
     pub search: Option<String>,
     pub show_help: bool,
@@ -296,7 +297,7 @@ impl App {
         if self.input.is_some() {
             self.handle_input_key(key);
             if self.input.is_none() {
-                self.settle_selection(self.selected_file());
+                self.settle_selection();
             }
             return;
         }
@@ -724,13 +725,23 @@ impl App {
             }
             return;
         }
-        let Some((path, anchor)) = self.cursor_anchor() else {
+        // The line the editor was opened for, not wherever the cursor is now.
+        let Some(((side, line), file)) = range.map(|(first, _)| first).zip(self.current()) else {
+            return;
+        };
+        let Some(anchor) = self
+            .diff_view()
+            .anchors
+            .into_iter()
+            .flatten()
+            .find(|anchor| (anchor.side, anchor.line) == (side, line))
+        else {
             return;
         };
         let note = Note {
-            path,
-            side: anchor.side,
-            line: anchor.line,
+            path: file.path.clone(),
+            side,
+            line,
             end_side: None,
             end_line: None,
             old_lines: None,
@@ -822,12 +833,19 @@ impl App {
             self.message = Some("put the cursor on a code line to select from it".to_string());
             return;
         };
-        self.selection = Some((anchor.side, anchor.line));
+        self.selection = self
+            .selected_file()
+            .map(|file| (file, (anchor.side, anchor.line)));
     }
 
     /// A key while a block is being selected: moving extends it, `m` notes it, `V` and
     /// Esc cancel it, and any other key cancels it and then does what it always does.
     fn handle_selecting_key(&mut self, key: KeyEvent) {
+        if self.selection_start().is_none() {
+            self.selection = None;
+            self.act(key);
+            return;
+        }
         let extends = matches!(
             key.code,
             KeyCode::Char(
@@ -843,9 +861,8 @@ impl App {
             KeyCode::Esc | KeyCode::Char('V') => self.selection = None,
             KeyCode::Char('m') => self.open_block_note(),
             _ if extends => {
-                let file = self.selected_file();
                 self.act(key);
-                self.settle_selection(file);
+                self.settle_selection();
             }
             _ => {
                 self.selection = None;
@@ -854,16 +871,21 @@ impl App {
         }
     }
 
+    /// The line the selection started on, while its file is the selected one.
+    fn selection_start(&self) -> Option<End> {
+        self.selection
+            .filter(|&(file, _)| Some(file) == self.selected_file())
+            .map(|(_, start)| start)
+    }
+
     /// After a key: cancels the selection if the file changed, focus left the diff or
     /// its start is no longer shown; otherwise keeps the cursor inside the start's hunk.
-    fn settle_selection(&mut self, file: Option<usize>) {
-        let Some(start) = self.selection else {
-            return;
-        };
+    fn settle_selection(&mut self) {
         let view = self.diff_view();
         let hunk = self
-            .start_line(&view, start)
-            .filter(|_| self.selected_file() == file && self.focus == Focus::Diff)
+            .selection_start()
+            .and_then(|start| self.start_line(&view, start))
+            .filter(|_| self.focus == Focus::Diff)
             .and_then(|line| view.hunk_of[line]);
         let Some(hunk) = hunk else {
             self.selection = None;
@@ -885,31 +907,31 @@ impl App {
         })
     }
 
-    /// The pane lines the selection runs over, from its top to its bottom.
-    fn selection_span(&self) -> Option<(usize, usize)> {
-        let start = self.start_line(&self.diff_view(), self.selection?)?;
-        Some((start.min(self.cursor), start.max(self.cursor)))
+    /// The first and last pane lines of the block, both with code. A cursor on a line
+    /// with none of its own (a moved-block marker) stops at the nearest code line
+    /// towards the start.
+    fn selection_lines(&self, view: &DiffView) -> Option<(usize, usize)> {
+        let start = self.start_line(view, self.selection_start()?)?;
+        let cursor = self.cursor.min(view.anchors.len().saturating_sub(1));
+        let has_code = |line: &usize| view.anchors[*line].is_some();
+        if cursor >= start {
+            Some((start, (start..=cursor).rev().find(has_code)?))
+        } else {
+            Some(((cursor..=start).find(has_code)?, start))
+        }
     }
 
-    /// The selection's two ends in file terms, in pane order. A cursor on a line with
-    /// no code of its own takes the nearest code line towards the start.
+    /// The pane lines the selection runs over, from its top to its bottom.
+    fn selection_span(&self) -> Option<(usize, usize)> {
+        self.selection_lines(&self.diff_view())
+    }
+
+    /// The selection's two ends in file terms, in pane order.
     fn selection_ends(&self) -> Option<(End, End)> {
         let view = self.diff_view();
-        let start = self.start_line(&view, self.selection?)?;
+        let (top, bottom) = self.selection_lines(&view)?;
         let end_of = |line: usize| view.anchors[line].as_ref().map(|a| (a.side, a.line));
-        let towards = if self.cursor >= start {
-            (start..=self.cursor.min(view.anchors.len() - 1))
-                .rev()
-                .find_map(end_of)
-        } else {
-            (self.cursor..=start).find_map(end_of)
-        }?;
-        let start_end = end_of(start)?;
-        Some(if self.cursor >= start {
-            (start_end, towards)
-        } else {
-            (towards, start_end)
-        })
+        Some((end_of(top)?, end_of(bottom)?))
     }
 
     /// `-- BLOCK …` for the status line while a block is being selected.
@@ -1455,7 +1477,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             "/{}   (Enter search · Esc cancel)",
             with_cursor(query, app.input_cursor)
         ),
-        (None, Some(message)) => message.clone(),
+        (None, Some(message)) => match app.block_status() {
+            Some(block) => format!("{block} · {message}"),
+            None => message.clone(),
+        },
         (None, None) => app.block_status().unwrap_or_else(|| {
             format!(
                 "{}{} · {reviewed}/{listed} reviewed{}",
