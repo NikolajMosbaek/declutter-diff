@@ -908,9 +908,10 @@ impl App {
         })
     }
 
-    /// The first and last pane lines of the block, both with code. A cursor on a line
-    /// with none of its own (a moved-block marker) stops at the nearest code line
-    /// towards the start.
+    /// The first and last pane lines of the block, both standing for a line of the file.
+    /// A cursor on a line with none of its own (a moved-block marker) stops at the
+    /// nearest such line towards the start. A note's line belongs to the row it sits
+    /// under, so a block that reaches up onto one starts at that row.
     fn selection_lines(&self, view: &DiffView) -> Option<(usize, usize)> {
         let start = self.start_line(view, self.selection_start()?)?;
         let cursor = self.cursor.min(view.anchors.len().saturating_sub(1));
@@ -918,7 +919,9 @@ impl App {
         if cursor >= start {
             Some((start, (start..=cursor).rev().find(has_code)?))
         } else {
-            Some(((cursor..=start).find(has_code)?, start))
+            let top = (cursor..=start).find(has_code)?;
+            let row = (0..=top).rev().find(|&line| view.texts[line].is_some())?;
+            Some((row, start))
         }
     }
 

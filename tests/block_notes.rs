@@ -5,6 +5,7 @@ use declutter::tui::{App, Input, draw};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::style::Color;
 
 const OLD: &str = "export function applyDiscount(cart, percent) {\n  const factor = 1 - percent / 100;\n  return { ...cart, total: cart.total * factor };\n}\n";
 const NEW: &str = "export function applyDiscount(cart, percent) {\n  if (percent < 0 || percent > 100) {\n    // A discount outside 0-100 is a bug upstream.\n    throw new RangeError(\"percent must be 0-100\");\n  }\n  const factor = 1 - percent / 100;\n  const total = Math.round(cart.total * factor * 100) / 100;\n  return { ...cart, total };\n}\n";
@@ -908,5 +909,65 @@ fn the_prompt_quotes_a_blank_last_line_of_a_block() {
         store.prompt(),
         "Please address these review comments. Line numbers refer to the version under review.\n\
          \n1. `a.ts:11–13`: why?\n   ```\n     if x {\n       y()\n   \n   ```\n"
+    );
+}
+
+/// The colour of the gutter's mark on each pane line from the hunk header down, where
+/// it has one: cyan for the cursor, yellow for the rest of a selection.
+fn gutter(app: &mut App) -> Vec<Option<Color>> {
+    let (width, height) = (120, 20);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal.draw(|frame| draw(frame, app)).expect("draw");
+    let buffer = terminal.backend().buffer();
+    let row = |y: u16| {
+        (0..width)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect::<String>()
+    };
+    let header = (0..height)
+        .find(|&y| row(y).contains("@@ -1 +1 @@"))
+        .expect("hunk header");
+    // The gutter is the column just left of the header's first `@`.
+    let at = (0..width)
+        .find(|&x| buffer[(x, header)].symbol() == "@")
+        .expect("@")
+        - 1;
+    (header..height)
+        .map(|y| {
+            let cell = &buffer[(at, y)];
+            (cell.symbol() == "▌").then_some(cell.fg)
+        })
+        .collect()
+}
+
+#[test]
+fn a_selection_up_onto_a_note_line_highlights_the_row_the_note_sits_under() {
+    let mut app = cart_app(seeded((New, 2), (New, 2), "first", false));
+    let rows = pane(&mut app);
+    assert!(rows[3].contains("✎ first"), "{}", rows[3]);
+    press(&mut app, &[j(), j()]);
+    assert_eq!(app.cursor, 4);
+    press(&mut app, &[v(), KeyCode::Char('k')]);
+    assert_eq!(app.cursor, 3);
+    assert!(
+        block_status(&mut app).starts_with("-- BLOCK  cart.ts:2–4 (3 lines) ·"),
+        "{}",
+        block_status(&mut app)
+    );
+    let marks = gutter(&mut app);
+    assert_eq!(
+        marks[1..=5],
+        [
+            None,
+            Some(Color::Yellow),
+            Some(Color::Cyan),
+            Some(Color::Yellow),
+            None
+        ]
+    );
+    type_note(&mut app, "block");
+    assert_eq!(
+        texts(app.notes.find_block("cart.ts", (New, 2), (New, 4))),
+        Some("block")
     );
 }
