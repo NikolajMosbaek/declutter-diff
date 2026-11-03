@@ -408,7 +408,9 @@ fn add_notes(dir: &Path, positionals: &[String], args: &Args) -> Result<()> {
     for (i, entry) in entries.into_iter().enumerate() {
         let note = match (entry.path, entry.line) {
             _ if entry.text.trim().is_empty() => Err(anyhow!("the text is empty")),
-            (None, None) if entry.end_line.is_none() => Ok(Note::on_pull_request(entry.text.trim())),
+            (None, None) if entry.end_line.is_none() => {
+                Ok(Note::on_pull_request(entry.text.trim()))
+            }
             (Some(path), Some(line)) => Note::on_block(
                 &files,
                 &path,

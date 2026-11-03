@@ -1,5 +1,10 @@
+use declutter::review::Layers;
 use declutter::review::{ChangeStatus, FileChange, FileReview};
-use declutter::store::{Added, End, Note, NoteSide, NoteSide::*, NoteStore};
+use declutter::store::{Added, End, Note, NoteSide, NoteSide::*, NoteStore, ReviewStore};
+use declutter::tui::{App, Input, draw};
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 const OLD: &str = "export function applyDiscount(cart, percent) {\n  const factor = 1 - percent / 100;\n  return { ...cart, total: cart.total * factor };\n}\n";
 const NEW: &str = "export function applyDiscount(cart, percent) {\n  if (percent < 0 || percent > 100) {\n    // A discount outside 0-100 is a bug upstream.\n    throw new RangeError(\"percent must be 0-100\");\n  }\n  const factor = 1 - percent / 100;\n  const total = Math.round(cart.total * factor * 100) / 100;\n  return { ...cart, total };\n}\n";
@@ -230,4 +235,124 @@ fn a_block_runs_from_first_to_last_in_diff_order_whichever_way_it_is_given() {
     let forward = Note::block(&cart(), (NoteSide::New, 7), (NoteSide::New, 8), "x");
     let backward = Note::block(&cart(), (NoteSide::New, 8), (NoteSide::New, 7), "x");
     assert_eq!(forward, backward);
+}
+
+fn key(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+fn screen(app: &mut App, width: u16, height: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal.draw(|frame| draw(frame, app)).expect("draw");
+    let buffer = terminal.backend().buffer();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                + "\n"
+        })
+        .collect()
+}
+
+/// The diff pane's rows as drawn, from the hunk header down (pane line 0 first).
+fn pane(app: &mut App) -> Vec<String> {
+    let text = screen(app, 120, 20);
+    let rows: Vec<String> = text.lines().map(str::to_string).collect();
+    let header = rows
+        .iter()
+        .position(|row| row.contains("@@ -1 +1 @@"))
+        .expect("hunk header");
+    rows[header..].to_vec()
+}
+
+fn cart_app(notes: NoteStore) -> App {
+    let new_app = |notes| {
+        let mut app = App::with_stores(
+            vec![cart()],
+            Layers::default(),
+            ReviewStore::in_memory(),
+            notes,
+        );
+        app.handle_key(key(KeyCode::Right));
+        app
+    };
+    // The fixture's pane lines, checked without notes so none sits between rows.
+    let rows = pane(&mut new_app(NoteStore::in_memory()));
+    assert!(rows[2].contains("2 +   if (percent"), "{}", rows[2]);
+    assert!(rows[6].contains("3       -   return"), "{}", rows[6]);
+    new_app(notes)
+}
+
+fn seeded(first: End, last: End, text: &str, draft: bool) -> NoteStore {
+    let mut notes = NoteStore::in_memory();
+    let note = Note {
+        draft,
+        ..Note::block(&cart(), first, last, text)
+    };
+    notes.set(note).expect("seed");
+    notes
+}
+
+#[test]
+fn a_block_note_has_a_bar_beside_its_lines_and_sits_under_the_last() {
+    let notes = seeded((New, 2), (New, 5), "Should 100% be allowed?", false);
+    let mut app = App::with_stores(
+        vec![cart()],
+        Layers::default(),
+        ReviewStore::in_memory(),
+        notes,
+    );
+    app.handle_key(key(KeyCode::Right));
+    let rows = pane(&mut app);
+    assert!(rows[2].contains("2 +▎  if (percent"), "{}", rows[2]);
+    assert!(rows[3].contains("4 +▎    throw"), "{}", rows[3]);
+    assert!(rows[4].contains("5 +▎  }"), "{}", rows[4]);
+    assert!(
+        rows[5].contains("✎ 2–5 · Should 100% be allowed?"),
+        "{}",
+        rows[5]
+    );
+    assert!(rows[6].contains("const factor"), "{}", rows[6]);
+    assert!(!rows[6].contains('▎'), "{}", rows[6]);
+    assert!(!rows[1].contains('▎'), "{}", rows[1]);
+}
+
+#[test]
+fn the_note_sits_under_the_last_visible_line_when_a_layer_hides_the_end() {
+    let notes = seeded((New, 2), (New, 3), "x", false);
+    let mut app = App::with_stores(
+        vec![cart()],
+        Layers::default(),
+        ReviewStore::in_memory(),
+        notes,
+    );
+    app.handle_key(key(KeyCode::Right));
+    let rows = pane(&mut app);
+    assert!(rows[2].contains("2 +▎  if (percent"), "{}", rows[2]);
+    assert!(rows[3].contains("✎ 2–3 · x"), "{}", rows[3]);
+}
+
+#[test]
+fn a_draft_block_is_marked_as_one() {
+    let notes = seeded((New, 2), (New, 5), "x", true);
+    let mut app = cart_app(notes);
+    assert!(screen(&mut app, 120, 20).contains("✎ draft · 2–5 · x"));
+}
+
+#[test]
+fn m_on_any_line_of_a_block_reopens_it_and_saving_keeps_its_range() {
+    let notes = seeded((New, 2), (New, 5), "Check the bounds.", true);
+    let mut app = cart_app(notes);
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Char('m')));
+    assert_eq!(app.input, Some(Input::Note("Check the bounds.".into())));
+    assert!(screen(&mut app, 120, 20).contains("Note on cart.ts:2–5"));
+    app.handle_key(key(KeyCode::Enter));
+    let all = app.notes.notes();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].first(), (New, 2));
+    assert_eq!(all[0].last(), (New, 5));
+    assert!(!all[0].draft);
+    assert_eq!(all[0].text, "Check the bounds.");
 }

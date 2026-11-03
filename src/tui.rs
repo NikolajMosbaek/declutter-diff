@@ -20,7 +20,7 @@ use crate::palette::Palette;
 use crate::project::LayerMode;
 use crate::render::{empty_message, file_title};
 use crate::review::{ChangeStatus, Detection, FileReview, Layers, Summary};
-use crate::store::{Note, NoteSide, NoteStore, ReviewStore};
+use crate::store::{End, Note, NoteSide, NoteStore, ReviewStore};
 
 /// Key help, most-used first: a narrow terminal cuts the end off. `?` shows them all.
 const HELP: &str = " ↑↓ move  ←→ pane  ]/[ change  }/{ file  / search  r reviewed  m note  c t i l f layers  a all  ? help  q quit";
@@ -155,6 +155,8 @@ pub struct App {
     pub input: Option<Input>,
     /// Where typing goes in the input, in characters from its start.
     input_cursor: usize,
+    /// The range the open note editor writes to: both ends the same for a line note.
+    editing: Option<(End, End)>,
     /// The last search, highlighted in the diff until cleared with Esc.
     pub search: Option<String>,
     pub show_help: bool,
@@ -213,6 +215,7 @@ impl App {
             notes,
             input: None,
             input_cursor: 0,
+            editing: None,
             search: None,
             show_help: false,
             message: None,
@@ -658,7 +661,9 @@ impl App {
             self.message = Some("put the cursor on a code line to leave a note".to_string());
             return;
         };
-        let existing = self.notes.find(&path, anchor.side, anchor.line);
+        let here = (anchor.side, anchor.line);
+        let existing = self.notes.at_line(&path, anchor.side, anchor.line);
+        self.editing = Some(existing.map_or((here, here), |note| (note.first(), note.last())));
         self.start_input(Input::Note(
             existing.map(|note| note.text.clone()).unwrap_or_default(),
         ));
@@ -684,6 +689,22 @@ impl App {
         let Some((path, anchor)) = self.cursor_anchor() else {
             return;
         };
+        let range = self.editing.take();
+        if let Some((first, last)) = range
+            && first != last
+        {
+            let Some(file) = self.current() else {
+                return;
+            };
+            let note = Note {
+                draft: false,
+                ..Note::block(file, first, last, text)
+            };
+            if let Err(error) = self.notes.set(note) {
+                self.message = Some(format!("could not save the note: {error:#}"));
+            }
+            return;
+        }
         let note = Note {
             path,
             side: anchor.side,
@@ -871,6 +892,35 @@ impl App {
             out.anchors.push(anchor);
             out.texts.push(text);
         };
+        let notes: Vec<&Note> = self
+            .notes
+            .notes()
+            .into_iter()
+            .filter(|note| note.path == file.path && !note.is_general())
+            .collect();
+        let shown = |hunk_index: usize, row_index: usize| {
+            !(self.collapse_moves && self.moves.contains_key(&(position, hunk_index, row_index)))
+        };
+        // Each note goes under the last row it covers among the rows actually shown.
+        let mut under: HashMap<(usize, usize), Vec<&Note>> = HashMap::new();
+        for note in &notes {
+            let last = view
+                .hunks
+                .iter()
+                .enumerate()
+                .flat_map(|(h, hunk)| {
+                    hunk.rows
+                        .iter()
+                        .enumerate()
+                        .map(move |(r, row)| (h, r, row))
+                })
+                .rfind(|&(h, r, row)| {
+                    shown(h, r) && anchor_of(row).is_some_and(|a| note.covers(a.side, a.line))
+                });
+            if let Some((h, r, _)) = last {
+                under.entry((h, r)).or_default().push(note);
+            }
+        }
         for (hunk_index, hunk) in view.hunks.iter().enumerate() {
             if hunk_index > 0 {
                 push(&mut out, Line::from(""), None, None);
@@ -916,6 +966,11 @@ impl App {
                     &mut out,
                     row_line(
                         row,
+                        anchor.as_ref().is_some_and(|a| {
+                            notes
+                                .iter()
+                                .any(|note| note.is_block() && note.covers(a.side, a.line))
+                        }),
                         moved.is_some(),
                         self.search.as_deref(),
                         &self.palette,
@@ -924,11 +979,11 @@ impl App {
                     anchor.clone(),
                     Some(row.text.clone()),
                 );
-                if let Some(anchor) = anchor
-                    && let Some(note) = self.notes.find(&file.path, anchor.side, anchor.line)
-                {
-                    for line in note_lines(note, self.diff_width) {
-                        push(&mut out, line, Some(anchor.clone()), None);
+                if let Some(anchor) = anchor {
+                    for note in under.get(&(hunk_index, row_index)).into_iter().flatten() {
+                        for line in note_lines(note, self.diff_width) {
+                            push(&mut out, line, Some(anchor.clone()), None);
+                        }
                     }
                 }
             }
@@ -943,7 +998,16 @@ const NOTE_INDENT: usize = 14;
 
 /// A note under its line: its text wrapped to the pane, a draft marked as one.
 fn note_lines(note: &Note, width: usize) -> Vec<Line<'static>> {
-    let marker = if note.draft { "✎ draft · " } else { "✎ " };
+    let label = if note.is_block() {
+        format!("{} · ", note.label())
+    } else {
+        String::new()
+    };
+    let marker = if note.draft {
+        format!("✎ draft · {label}")
+    } else {
+        format!("✎ {label}")
+    };
     let width = width.saturating_sub(NOTE_INDENT + 2).max(20);
     let style = if note.draft {
         Style::new().fg(Color::Yellow).italic()
@@ -1028,6 +1092,7 @@ fn anchor_of(row: &Row) -> Option<Anchor> {
 /// on and the file has a grammar), changed words and search matches.
 fn row_line(
     row: &Row,
+    bar: bool,
     moved: bool,
     search: Option<&str>,
     palette: &Palette,
@@ -1090,9 +1155,14 @@ fn row_line(
             Style::new().add_modifier(Modifier::DIM),
         ),
         Span::styled(
-            format!("{sign} "),
+            sign.to_string(),
             line.fg(sign_colour).add_modifier(Modifier::BOLD),
         ),
+        if bar {
+            Span::styled("▎", Style::new().fg(Color::Yellow))
+        } else {
+            Span::styled(" ", line)
+        },
     ];
     spans.extend(styled_segments(&row.text, style, &marks));
     Line::from(spans)
@@ -1246,6 +1316,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let title = match &app.input {
             Some(Input::General(_)) => " Note on the change as a whole ".to_string(),
             _ => match app.cursor_anchor() {
+                Some((_, _))
+                    if let Some((first, last)) =
+                        app.editing.filter(|(first, last)| first != last)
+                        && let Some(file) = app.current() =>
+                {
+                    let place = Note::block(file, first, last, "").place();
+                    format!(" Note on {} ", place.replace('`', ""))
+                }
                 Some((path, anchor)) if anchor.side == NoteSide::Old => {
                     format!(" Note on {path}, removed line {} ", anchor.line)
                 }
