@@ -1,6 +1,6 @@
 # Block notes: one note on several lines
 
-Date: 2026-11-03 · Status: draft, awaiting approval
+Date: 2026-11-03 · Status: approved
 
 ## Why
 

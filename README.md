@@ -74,6 +74,11 @@ Post 1 comment to PR 42? [y/N] y
 Posted 1 comment to PR 42.
 ```
 
+For a note on several lines — a guard clause, a loop, a replaced expression — press `V` on
+the first, `j`/`k` to the last, then `m`. The lines get a yellow `▎` beside them and the
+note sits under the last one, starting with the range: `✎ 11–13 · Should 100% be allowed?`.
+`m` on any of them opens it again. Lines a layer hides inside the block are part of it.
+
 Each note lands on its line in the PR, posted under your own account:
 
 ![Opening a pull request by URL, leaving a note, and posting it when quitting](https://raw.githubusercontent.com/NikolajMosbaek/declutter-diff/main/docs/images/pr.gif)
@@ -86,8 +91,17 @@ Each note lands on its line in the PR, posted under your own account:
 | Open a PR | your normal git access to the repository | your normal git access to the repository |
 | Post your notes | the `gh` CLI, signed in (`gh auth login`) | the `az` CLI, signed in (`az login`) |
 | A note becomes | one review, with each note a comment on its line (`P`'s note is the review's text) | a comment thread on the line (`P`'s note: a thread on the PR) |
+| A block note becomes | a comment in that review highlighting all its lines | one thread highlighting all its lines |
 
 Nothing is posted unless you answer `y`; notes you don't post are kept for next time.
+
+A block that takes in removed lines along with added or unchanged ones is anchored on both
+sides of the diff. If Azure DevOps refuses a thread on both sides, it is posted on the added
+and unchanged lines alone, and you are told:
+
+```
+  `src/cart.ts` (removed line 12 to line 16): Azure DevOps highlights 14–16 only
+```
 
 ### Notes from a coding agent
 
@@ -270,7 +284,8 @@ these review comments… 1. `path:line`: note") and also saves it to
 notes you left and asks `Post 3 comments to PR 42? [y/N]`. Only `y` posts: each note
 becomes a comment on its line (a thread in Azure DevOps via `az rest`; on GitHub, one
 review via `gh api` — or, if GitHub refuses it, one comment per note, on the file when
-GitHub won't take that line), as whoever those CLIs are signed in as. Drafts you haven't
+GitHub won't take that line), as whoever those CLIs are signed in as. A block note is one
+comment over all its lines; on the file, its text starts `Lines 11–13:`. Drafts you haven't
 opened are kept back. Posted notes move to `.git/declutter/posted.jsonl` with a link to
 where they landed; any that fail stay, with the error.
 
