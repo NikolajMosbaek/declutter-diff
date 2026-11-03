@@ -209,7 +209,7 @@ declutter --print                          # print instead of opening the viewer
 declutter -p --comments only               # print only the comment changes
 declutter -n                               # print with each row's old and new line numbers
 declutter notes [<target>] [--json]        # the notes as a prompt (or JSON), of one review or all
-declutter notes add <target> …             # add draft notes, e.g. from a coding agent
+declutter notes add <target> …             # add draft notes on a line or a block (--line 11-13)
 declutter notes post <target> [--yes]      # post a PR's notes without opening the viewer
 declutter --tests hidden                   # start with test files left out
 ```
@@ -230,7 +230,9 @@ declutter --tests hidden                   # start with test files left out
 
 The file list's title says what is being compared (`origin/main...feature/login`, `PR 42`).
 
-Viewer keys:
+Viewer keys, grouped as on the `?` screen:
+
+**Move**
 
 | Key | Action |
 |-----|--------|
@@ -238,23 +240,44 @@ Viewer keys:
 | `←` `→` / `Tab` / `Enter` | switch between the file list and the diff |
 | `]` `[` | next / previous change, on into the next file |
 | `}` `{` | next / previous file |
-| `Space` `b` | page down / up (`d` `u` half a page) |
+| `Space` `b` | page down / up |
+| `d` `u` | half a page down / up |
 | `g` `G` | top / bottom of the diff (first / last file in the file list) |
 | `/` `n` `N` | search the diff; next / previous match (smart case) |
+
+**Other**
+
+| Key | Action |
+|-----|--------|
+| `Esc` | back: leave the diff, close a prompt, cancel a selection, clear the search |
+| `?` | every key |
+| `q` | quit |
+
+**Review**
+
+| Key | Action |
+|-----|--------|
 | `r` | mark the file reviewed and jump to the next unreviewed one (again to unmark) |
-| `m` | leave a note on the line under the cursor, or open the draft there (`Alt+Enter`: new line — on macOS, with the terminal's "Use Option as Meta" on) |
+| `m` | leave a note on the line under the cursor, or open the note or draft there (a block's note opens from any of its lines) |
 | `V` | select a block of lines: `j` `k` (or any move key) extend it within its hunk, `m` notes it, `Esc` cancels |
 | `P` | leave a note on the change as a whole |
+| `Alt+Enter` | new line while writing a note (on macOS, with the terminal's "Use Option as Meta" on) |
 | `E` | copy all notes to the clipboard as one prompt for a coding agent |
 | `o` | open the file in `$VISUAL` / `$EDITOR` at the cursor's line |
-| `c` `t` `i` `l` `f` | hide / show comments, tests, imports, logging, formatting-only changes |
-| `C` `T` `I` `L` `F` | show only that layer; press again to go back |
+
+**Layers**: the lower-case key hides / shows the layer; with Shift, only that layer is shown
+(press again to go back)
+
+| Key | Action |
+|-----|--------|
+| `c` `C` | comments |
+| `t` `T` | tests |
+| `i` `I` | imports |
+| `l` `L` | logging |
+| `f` `F` | formatting-only changes |
 | `a` | all filters off (everything shown); press again to put them back |
 | `M` | collapse moved blocks to their one-line marker, or expand them |
 | `s` | syntax colouring on / off (`--no-syntax` starts with it off) |
-| `?` | every key |
-| `Esc` | back: leave the diff, close a prompt, clear the search |
-| `q` | quit |
 
 Toggling a layer keeps the cursor on the same line of the file (or the closest one still
 shown), so you can flip comments on and off without losing your place.
