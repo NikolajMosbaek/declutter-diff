@@ -933,7 +933,8 @@ impl App {
     fn block_status(&self, view: &DiffView) -> Option<String> {
         let (first, last) = self.selection_ends(view)?;
         let note = Note::block(self.current()?, self.layers, first, last, "");
-        let lines = note.code.lines().count();
+        // Split, not `lines()`, so a blank last line counts.
+        let lines = note.code.split('\n').count();
         Some(format!(
             "-- BLOCK  {} ({lines} line{}) · j/k extend · m note · Esc cancel --",
             note.place().replace('`', ""),

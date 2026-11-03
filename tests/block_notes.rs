@@ -876,3 +876,37 @@ fn a_block_note_sits_under_its_last_row_still_shown_when_moved_rows_collapse() {
     assert!(rows[4].contains("✎ on k2"), "{}", rows[4]);
     assert!(rows[5].contains("lines moved to line 8"), "{}", rows[5]);
 }
+
+#[test]
+fn a_blank_last_line_counts_in_the_block_status() {
+    let old = "function a() {\n}\n";
+    let new = "function a() {\n  let x = 1;\n\n  let y = 2;\n}\n";
+    let mut app = p_app(old, new);
+    // With comments hidden, the blank line goes with them; show it.
+    press(&mut app, &[KeyCode::Char('c')]);
+    assert_eq!(app.cursor, 2);
+    press(&mut app, &[j(), v()]);
+    let lone = block_status(&mut app);
+    press(&mut app, &[KeyCode::Esc, KeyCode::Char('k'), v(), j()]);
+    let ending = block_status(&mut app);
+    assert_eq!(
+        (lone.as_str(), ending.as_str()),
+        (
+            "-- BLOCK  p.ts:3 (1 line) · j/k extend · m note · Esc cancel --",
+            "-- BLOCK  p.ts:2–3 (2 lines) · j/k extend · m note · Esc cancel --"
+        )
+    );
+}
+
+#[test]
+fn the_prompt_quotes_a_blank_last_line_of_a_block() {
+    let mut store = NoteStore::in_memory();
+    let mut note = block((New, 11), (New, 13), None, "why?");
+    note.code = "  if x {\n    y()\n".into();
+    store.set(note).unwrap();
+    assert_eq!(
+        store.prompt(),
+        "Please address these review comments. Line numbers refer to the version under review.\n\
+         \n1. `a.ts:11–13`: why?\n   ```\n     if x {\n       y()\n   \n   ```\n"
+    );
+}

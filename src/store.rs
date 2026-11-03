@@ -393,9 +393,10 @@ impl NoteStore {
                 out.push_str(&format!("\n{}. On the change as a whole: {text}\n", i + 1));
             } else {
                 let code = if note.is_block() {
+                    // Split, not `lines()`, so a blank last line is quoted too.
                     let lines: Vec<String> = note
                         .code
-                        .lines()
+                        .split('\n')
                         .map(|line| format!("   {}", line.trim_end()))
                         .collect();
                     lines.join("\n")
