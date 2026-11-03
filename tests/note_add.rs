@@ -299,3 +299,13 @@ fn notes_add_takes_a_range_of_lines() {
     assert!(!ok);
     assert!(err.contains("--line needs a line number, or a range such as 11-13"), "{err}");
 }
+
+#[test]
+fn notes_add_refuses_an_end_line_without_a_line() {
+    let dir = repo();
+    let (ok, _, err) = declutter(dir.path(), &["notes", "add", "feature", "--json", "-"],
+        Some(r#"[{"text": "x", "end_line": 5}]"#));
+    assert!(!ok);
+    assert!(err.contains("give both a path and a line"), "{err}");
+    assert!(listed(dir.path(), &["feature"])["notes"].as_array().is_none_or(|n| n.is_empty()));
+}
