@@ -246,7 +246,7 @@ fn azure_body(note: &Note, comments: Value) -> Value {
         put(NoteSide::New, anchor(new.0, new.1, end(&['+', ' '])));
     } else if note.is_block() {
         let (first, last) = (note.first().1, note.last().1);
-        let end = end_offset(note.code.lines().last().unwrap_or_default());
+        let end = end_offset(note.code.rsplit('\n').next().unwrap_or_default());
         put(note.side, anchor(first, last, end));
     } else {
         put(note.side, anchor(note.line, note.line, 2));

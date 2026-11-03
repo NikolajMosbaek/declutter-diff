@@ -521,3 +521,19 @@ fn a_thread_narrowed_to_one_side_is_reported_after_posting() {
     let summary = out.find("Posted 1 comment").expect("summary");
     assert!(out.find(said).expect(&out) < summary, "{out}");
 }
+
+#[test]
+fn an_azure_thread_on_a_block_ending_on_a_blank_line_ends_at_offset_two() {
+    let note = block(
+        (NoteSide::New, 11),
+        (NoteSide::New, 13),
+        None,
+        "fn total() {\n  return t;\n",
+        "x",
+    );
+    let (_, body) = azure_thread(&azure_pr(), &note);
+    assert_eq!(
+        body["threadContext"]["rightFileEnd"],
+        json!({ "line": 13, "offset": 2 })
+    );
+}
