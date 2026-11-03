@@ -718,7 +718,7 @@ impl App {
             };
             let note = Note {
                 draft: false,
-                ..Note::block(file, first, last, text)
+                ..Note::block(file, self.layers, first, last, text)
             };
             if let Err(error) = self.notes.set(note) {
                 self.message = Some(format!("could not save the note: {error:#}"));
@@ -937,7 +937,7 @@ impl App {
     /// `-- BLOCK …` for the status line while a block is being selected.
     fn block_status(&self) -> Option<String> {
         let (first, last) = self.selection_ends()?;
-        let note = Note::block(self.current()?, first, last, "");
+        let note = Note::block(self.current()?, self.layers, first, last, "");
         let lines = note.code.lines().count();
         Some(format!(
             "-- BLOCK  {} ({lines} line{}) · j/k extend · m note · Esc cancel --",
@@ -1507,7 +1507,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let block_title = if let Some((first, last)) = app.editing.filter(|(a, b)| a != b)
             && let Some(file) = app.current()
         {
-            let place = Note::block(file, first, last, "").place();
+            let place = Note::block(file, app.layers, first, last, "").place();
             Some(format!(" Note on {} ", place.replace('`', "")))
         } else {
             None

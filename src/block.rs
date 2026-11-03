@@ -3,7 +3,7 @@
 use anyhow::{Result, bail};
 
 use crate::diff::{Row, RowKind};
-use crate::review::{DiffModes, FileReview};
+use crate::review::{DiffModes, FileReview, ModeView};
 use crate::store::{End, Note, NoteSide, ranges};
 
 /// Whether `row` is the row `end` points at: a removed row by its old line, an added or
@@ -34,35 +34,46 @@ fn source_lines(file: &FileReview, side: NoteSide, first: usize, last: usize) ->
         .join("\n")
 }
 
+/// The rows of `view` from the row `first` points at to the row `last` points at, in
+/// diff order, and whether the ends came the other way round; `None` unless both are
+/// rows of it.
+fn rows_between(view: &ModeView, first: End, last: End) -> Option<(Vec<&Row>, bool)> {
+    let rows: Vec<&Row> = view.hunks.iter().flat_map(|hunk| &hunk.rows).collect();
+    let start = rows.iter().position(|row| is_at(row, first))?;
+    let end = rows.iter().rposition(|row| is_at(row, last))?;
+    Some(if start <= end {
+        (rows[start..=end].to_vec(), false)
+    } else {
+        (rows[end..=start].to_vec(), true)
+    })
+}
+
 impl Note {
-    /// A note on the lines from `first` to `last` of `file`, quoting what they say. The
-    /// ends are looked up in the file's full diff; a block that takes in removed lines
-    /// along with others is quoted as a diff and records the lines it covers on each
-    /// side, any other block quotes the version it is on. An end that is not in the
-    /// diff — the viewer can pick one its decluttered view shows but the full diff does
-    /// not — makes the block a single-sided one, quoted from the first end's version.
-    /// Ends given out of diff order are swapped, so the note runs from first to last as
-    /// the diff reads. Never fails, and is not a draft; one line is a line note.
+    /// A note on the lines from `first` to `last` of `file`, picked in the view of it
+    /// that `modes` gives, quoting what they say. The block is the rows between its ends
+    /// in the full diff, so lines a layer hides are part of it; when an end is not in the
+    /// full diff — a decluttered view shows more context than the full diff — it is the
+    /// rows between them in the view they were picked in, so it is saved as selected. A
+    /// block that takes in removed lines along with others is quoted as a diff and
+    /// records the lines it covers on each side, any other block quotes the version it
+    /// is on. Ends given out of diff order are swapped, so the note runs from first to
+    /// last as the diff reads. Never fails, and is not a draft; one line is a line note.
     pub fn block(
         file: &FileReview,
-        mut first: End,
-        mut last: End,
+        modes: impl Into<DiffModes>,
+        first: End,
+        last: End,
         text: impl Into<String>,
     ) -> Note {
-        let view = file.view(DiffModes::SHOWN);
-        let rows: Vec<&Row> = view.hunks.iter().flat_map(|hunk| &hunk.rows).collect();
-        let start = rows.iter().position(|row| is_at(row, first));
-        let end = rows.iter().rposition(|row| is_at(row, last));
-        let (start, end) = match (start, end) {
-            (Some(a), Some(b)) if a > b => {
-                std::mem::swap(&mut first, &mut last);
-                (Some(b), Some(a))
-            }
-            both => both,
-        };
-        let covered = match (start, end) {
-            (Some(start), Some(end)) => &rows[start..=end],
-            _ => &[],
+        let full = file.view(DiffModes::SHOWN);
+        let picked = file.view(modes);
+        let found = rows_between(&full, first, last).or_else(|| rows_between(&picked, first, last));
+        let (first, last, covered) = match found {
+            Some((rows, false)) => (first, last, rows),
+            Some((rows, true)) => (last, first, rows),
+            // In neither diff: keep the ends in reading order when they share a side.
+            None if first.0 == last.0 && last.1 < first.1 => (last, first, Vec::new()),
+            None => (first, last, Vec::new()),
         };
 
         let removed = covered.iter().any(|row| row.kind == RowKind::Removed);
@@ -88,8 +99,8 @@ impl Note {
             return note;
         }
         note.end_line = Some(last.1);
+        note.end_side = (last.0 != first.0).then_some(last.0);
         if removed && others {
-            note.end_side = (last.0 != first.0).then_some(last.0);
             note.old_lines = span(
                 covered
                     .iter()
@@ -114,6 +125,20 @@ impl Note {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
+        } else if first.0 != last.0 {
+            // Ends on both sides with no rows between them: each side covers its own end,
+            // and a new-side line outside the full diff is an unchanged one.
+            let quote = |(side, line): End| match side {
+                NoteSide::Old => format!("-{}", source_lines(file, side, line, line)),
+                NoteSide::New => format!(" {}", source_lines(file, side, line, line)),
+            };
+            for (side, line) in [first, last] {
+                match side {
+                    NoteSide::Old => note.old_lines = Some((line, line)),
+                    NoteSide::New => note.new_lines = Some((line, line)),
+                }
+            }
+            note.code = format!("{}\n{}", quote(first), quote(last));
         } else {
             note.code = source_lines(file, first.0, first.1, last.1);
         }
@@ -171,7 +196,7 @@ impl Note {
         if a != b {
             return Err(not_in_diff(&subject, which, &lines));
         }
-        let mut note = Note::block(file, (side, first), (side, last), text);
+        let mut note = Note::block(file, DiffModes::SHOWN, (side, first), (side, last), text);
         note.draft = true;
         Ok(note)
     }

@@ -1,5 +1,5 @@
 use declutter::review::Layers;
-use declutter::review::{ChangeStatus, FileChange, FileReview};
+use declutter::review::{ChangeStatus, DiffModes, FileChange, FileReview};
 use declutter::store::{Added, End, Note, NoteSide, NoteSide::*, NoteStore, ReviewStore};
 use declutter::tui::{App, Input, draw};
 use ratatui::Terminal;
@@ -178,7 +178,13 @@ fn a_block_that_ends_before_it_starts_has_no_size_to_underflow() {
 
 #[test]
 fn a_block_from_the_viewer_quotes_lines_hidden_by_a_layer() {
-    let note = Note::block(&cart(), (NoteSide::New, 2), (NoteSide::New, 5), "x");
+    let note = Note::block(
+        &cart(),
+        DiffModes::SHOWN,
+        (NoteSide::New, 2),
+        (NoteSide::New, 5),
+        "x",
+    );
     assert_eq!(note.code.lines().count(), 4);
     assert!(note.code.contains("// A discount outside 0-100"));
     assert!(!note.draft);
@@ -186,7 +192,13 @@ fn a_block_from_the_viewer_quotes_lines_hidden_by_a_layer() {
 
 #[test]
 fn a_block_from_a_removed_line_into_added_ones_records_both_sides() {
-    let note = Note::block(&cart(), (NoteSide::Old, 3), (NoteSide::New, 8), "x");
+    let note = Note::block(
+        &cart(),
+        DiffModes::SHOWN,
+        (NoteSide::Old, 3),
+        (NoteSide::New, 8),
+        "x",
+    );
     assert_eq!(
         (note.end_side, note.end_line),
         (Some(NoteSide::New), Some(8))
@@ -203,7 +215,13 @@ fn a_block_from_a_removed_line_into_added_ones_records_both_sides() {
 
 #[test]
 fn a_block_from_a_context_line_down_into_a_removed_one_records_both_sides() {
-    let note = Note::block(&cart(), (NoteSide::New, 6), (NoteSide::Old, 3), "x");
+    let note = Note::block(
+        &cart(),
+        DiffModes::SHOWN,
+        (NoteSide::New, 6),
+        (NoteSide::Old, 3),
+        "x",
+    );
     assert_eq!(
         (note.end_side, note.end_line),
         (Some(NoteSide::Old), Some(3))
@@ -217,23 +235,53 @@ fn a_block_from_a_context_line_down_into_a_removed_one_records_both_sides() {
 
 #[test]
 fn a_block_end_outside_the_diff_quotes_the_first_ends_side() {
-    let note = Note::block(&cart(), (NoteSide::New, 8), (NoteSide::New, 40), "x");
+    let note = Note::block(
+        &cart(),
+        DiffModes::SHOWN,
+        (NoteSide::New, 8),
+        (NoteSide::New, 40),
+        "x",
+    );
     assert_eq!(note.code, "  return { ...cart, total };\n}");
     assert_eq!((note.old_lines, note.new_lines), (None, None));
 }
 
 #[test]
 fn a_block_runs_from_first_to_last_in_diff_order_whichever_way_it_is_given() {
-    let down = Note::block(&cart(), (NoteSide::New, 6), (NoteSide::Old, 3), "x");
-    let up = Note::block(&cart(), (NoteSide::Old, 3), (NoteSide::New, 6), "x");
+    let down = Note::block(
+        &cart(),
+        DiffModes::SHOWN,
+        (NoteSide::New, 6),
+        (NoteSide::Old, 3),
+        "x",
+    );
+    let up = Note::block(
+        &cart(),
+        DiffModes::SHOWN,
+        (NoteSide::Old, 3),
+        (NoteSide::New, 6),
+        "x",
+    );
     assert_eq!(down, up);
     assert_eq!(
         (down.first(), down.last()),
         ((NoteSide::New, 6), (NoteSide::Old, 3))
     );
 
-    let forward = Note::block(&cart(), (NoteSide::New, 7), (NoteSide::New, 8), "x");
-    let backward = Note::block(&cart(), (NoteSide::New, 8), (NoteSide::New, 7), "x");
+    let forward = Note::block(
+        &cart(),
+        DiffModes::SHOWN,
+        (NoteSide::New, 7),
+        (NoteSide::New, 8),
+        "x",
+    );
+    let backward = Note::block(
+        &cart(),
+        DiffModes::SHOWN,
+        (NoteSide::New, 8),
+        (NoteSide::New, 7),
+        "x",
+    );
     assert_eq!(forward, backward);
 }
 
@@ -288,7 +336,7 @@ fn seeded(first: End, last: End, text: &str, draft: bool) -> NoteStore {
     let mut notes = NoteStore::in_memory();
     let note = Note {
         draft,
-        ..Note::block(&cart(), first, last, text)
+        ..Note::block(&cart(), DiffModes::SHOWN, first, last, text)
     };
     notes.set(note).expect("seed");
     notes
@@ -610,4 +658,172 @@ fn a_one_line_selection_with_the_cursor_on_a_moved_marker_still_saves() {
     let all = app.notes.notes();
     assert_eq!(all.len(), 1);
     assert_eq!((all[0].first(), all[0].text.as_str()), ((New, 2), "lost?"));
+}
+
+fn p_app(old: &str, new: &str) -> App {
+    let file = FileReview::new(FileChange {
+        path: "p.ts".to_string(),
+        old_path: None,
+        status: ChangeStatus::Modified,
+        old: Some(old.to_string()),
+        new: Some(new.to_string()),
+        binary: false,
+    });
+    let mut app = App::with_stores(
+        vec![file],
+        Layers::default(),
+        ReviewStore::in_memory(),
+        NoteStore::in_memory(),
+    );
+    press(&mut app, &[KeyCode::Right]);
+    app
+}
+
+/// The status line's `-- BLOCK …` text while selecting.
+fn block_status(app: &mut App) -> String {
+    let text = screen(app, 120, 20);
+    let line = text.lines().find(|line| line.contains("-- BLOCK"));
+    line.unwrap_or_else(|| panic!("no block status in\n{text}"))
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn a_block_from_a_removed_line_to_context_past_hidden_comments_is_saved_as_selected() {
+    // Old 2–9 removed; four comment lines (hidden) then `b`: old 14, new 6, which the
+    // decluttered view shows as context and the full diff does not.
+    let old = "const a = 1;\nconst r1 = 1;\nconst r2 = 2;\nconst r3 = 3;\nconst r4 = 4;\nconst r5 = 5;\nconst r6 = 6;\nconst r7 = 7;\nconst r8 = 8;\n// c1\n// c2\n// c3\n// c4\nconst b = 1;\nconst z = 1;\n";
+    let new = "const a = 1;\n// c1\n// c2\n// c3\n// c4\nconst b = 1;\nconst z = 1;\n";
+    let mut app = p_app(old, new);
+    assert_eq!(app.cursor, 2);
+    press(&mut app, &[j(), j(), j(), j(), j(), j(), j()]);
+    let rows = pane(&mut app);
+    assert!(rows[9].contains("9       - const r8"), "{}", rows[9]);
+    assert!(rows[10].contains("14     6   const b"), "{}", rows[10]);
+    press(&mut app, &[v(), j()]);
+    assert_eq!(
+        block_status(&mut app),
+        "-- BLOCK  p.ts (removed line 9 to line 6) (2 lines) · j/k extend · m note · Esc cancel --"
+    );
+    type_note(&mut app, "probe");
+    let all = app.notes.notes();
+    assert_eq!(all.len(), 1);
+    let note = all[0];
+    assert_eq!((note.first(), note.last()), ((Old, 9), (New, 6)));
+    assert_eq!((note.end_side, note.end_line), (Some(New), Some(6)));
+    assert_eq!(
+        (note.old_lines, note.new_lines),
+        (Some((9, 9)), Some((6, 6)))
+    );
+    assert_eq!(note.code, "-const r8 = 8;\n const b = 1;");
+    assert_eq!(note.size(), 2);
+    assert!(!note.draft);
+    assert_eq!(note.place(), "`p.ts` (removed line 9 to line 6)");
+
+    let rows = pane(&mut app);
+    assert!(rows[8].contains("8       - const r7"), "{}", rows[8]);
+    assert!(rows[9].contains("9       -▎const r8"), "{}", rows[9]);
+    assert!(rows[10].contains("14     6  ▎const b"), "{}", rows[10]);
+    assert!(
+        rows[11].contains("✎ removed 9 to 6 · probe"),
+        "{}",
+        rows[11]
+    );
+    assert!(!rows[12].contains('▎'), "{}", rows[12]);
+    assert_eq!(
+        app.notes.at_line("p.ts", New, 6).map(|n| n.text.as_str()),
+        Some("probe")
+    );
+}
+
+#[test]
+fn a_block_from_a_change_to_context_past_a_hidden_comment_keeps_both_sides() {
+    // A one-line change, one comment line (hidden), then code: the decluttered hunk
+    // ends on new line 6, which the full diff does not reach.
+    let old = "const a = 1;\nconst x = 1;\n// note\nconst b = 1;\nconst c = 1;\nconst d = 1;\nconst e = 1;\n";
+    let new = "const a = 1;\nconst x = 2;\n// note\nconst b = 1;\nconst c = 1;\nconst d = 1;\nconst e = 1;\n";
+    let mut app = p_app(old, new);
+    assert_eq!(app.cursor, 2);
+    press(&mut app, &[v(), KeyCode::Char('G')]);
+    assert_eq!(app.cursor, 6);
+    assert_eq!(
+        block_status(&mut app),
+        "-- BLOCK  p.ts (removed line 2 to line 6) (5 lines) · j/k extend · m note · Esc cancel --"
+    );
+    type_note(&mut app, "probe");
+    let all = app.notes.notes();
+    assert_eq!(all.len(), 1);
+    let note = all[0];
+    assert_eq!((note.first(), note.last()), ((Old, 2), (New, 6)));
+    assert_eq!((note.end_side, note.end_line), (Some(New), Some(6)));
+    assert_eq!(
+        (note.old_lines, note.new_lines),
+        (Some((2, 2)), Some((2, 6)))
+    );
+    assert_eq!(
+        note.code,
+        "-const x = 1;\n+const x = 2;\n const b = 1;\n const c = 1;\n const d = 1;"
+    );
+
+    let rows = pane(&mut app);
+    assert!(!rows[1].contains('▎'), "{}", rows[1]);
+    assert!(rows[2].contains("2       -▎const x = 1"), "{}", rows[2]);
+    assert!(rows[3].contains("2 +▎const x = 2"), "{}", rows[3]);
+    for (row, text) in [(4, "const b"), (5, "const c"), (6, "const d")] {
+        assert!(rows[row].contains(&format!("▎{text}")), "{}", rows[row]);
+    }
+    assert!(rows[7].contains("✎ removed 2 to 6 · probe"), "{}", rows[7]);
+}
+
+#[test]
+fn a_block_from_context_above_a_hidden_comment_down_to_a_removed_line_covers_that_line() {
+    let old = "const p = 1;\nconst q = 1;\nconst r = 1;\n// note\nconst x = 1;\nconst z = 1;\n";
+    let new = "const p = 1;\nconst q = 1;\nconst r = 1;\n// note\nconst x = 2;\nconst z = 1;\n";
+    let mut app = p_app(old, new);
+    press(&mut app, &[KeyCode::Char('g'), j(), v(), j(), j(), j()]);
+    assert_eq!(app.cursor, 4);
+    assert_eq!(
+        block_status(&mut app),
+        "-- BLOCK  p.ts (line 1 to removed line 5) (4 lines) · j/k extend · m note · Esc cancel --"
+    );
+    type_note(&mut app, "zz");
+    let all = app.notes.notes();
+    assert_eq!(all.len(), 1);
+    let note = all[0];
+    assert_eq!((note.first(), note.last()), ((New, 1), (Old, 5)));
+    assert_eq!((note.end_side, note.end_line), (Some(Old), Some(5)));
+    assert_eq!(
+        (note.old_lines, note.new_lines),
+        (Some((5, 5)), Some((1, 3)))
+    );
+    assert_eq!(
+        note.code,
+        " const p = 1;\n const q = 1;\n const r = 1;\n-const x = 1;"
+    );
+
+    let rows = pane(&mut app);
+    for (row, text) in [(1, "const p"), (2, "const q"), (3, "const r")] {
+        assert!(rows[row].contains(&format!("▎{text}")), "{}", rows[row]);
+    }
+    assert!(rows[4].contains("5       -▎const x = 1"), "{}", rows[4]);
+    assert!(rows[5].contains("✎ 1 to removed 5 · zz"), "{}", rows[5]);
+    assert!(rows[6].contains("5 + const x = 2"), "{}", rows[6]);
+    assert!(!rows[6].contains('▎'), "{}", rows[6]);
+}
+
+#[test]
+fn a_block_with_an_end_in_neither_diff_never_runs_backwards_or_loses_a_side() {
+    let backwards = Note::block(&cart(), DiffModes::SHOWN, (New, 40), (New, 8), "x");
+    assert_eq!((backwards.first(), backwards.last()), ((New, 8), (New, 40)));
+    assert_eq!(backwards.code, "  return { ...cart, total };\n}");
+
+    let across = Note::block(&cart(), DiffModes::SHOWN, (Old, 3), (New, 40), "x");
+    assert_eq!((across.first(), across.last()), ((Old, 3), (New, 40)));
+    assert_eq!(across.end_side, Some(New));
+    assert_eq!(
+        (across.old_lines, across.new_lines),
+        (Some((3, 3)), Some((40, 40)))
+    );
+    assert!(across.covers(Old, 3) && across.covers(New, 40));
+    assert!(!across.covers(New, 3) && !across.covers(Old, 40));
 }
