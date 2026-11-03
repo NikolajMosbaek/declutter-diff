@@ -272,6 +272,7 @@ fn posted_notes_are_logged_with_their_link_and_leave_the_store() {
             Link {
                 id: "11".into(),
                 url: "https://example.com/11".into(),
+                ..Default::default()
             },
         )])
         .expect("record");

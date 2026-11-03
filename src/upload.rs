@@ -31,28 +31,23 @@ impl Poster for CliPoster {
             Repo::AzureDevOps { .. } => notes
                 .iter()
                 .map(|note| {
-                    let (url, body) = azure_thread(pr, note);
-                    let thread = run(
-                        "az",
-                        &[
-                            "rest",
-                            "--method",
-                            "post",
-                            "--uri",
-                            &url,
-                            "--resource",
-                            AZURE_DEVOPS,
-                            "--headers",
-                            "Content-Type=application/json",
-                            "--body",
-                            &body.to_string(),
-                        ],
-                        None,
-                    )?;
+                    let (thread, remark) = match azure_post(&azure_thread(pr, note)) {
+                        Ok(thread) => (thread, None),
+                        // Azure DevOps may refuse a range on the old side; the right
+                        // side alone still shows where the note is.
+                        Err(error) => match azure_thread_right_only(pr, note) {
+                            Some(narrowed) => {
+                                let thread = azure_post(&narrowed).map_err(|_| error)?;
+                                (thread, right_remark(note))
+                            }
+                            None => return Err(error),
+                        },
+                    };
                     let id = id_of(&thread);
                     Ok(Link {
                         url: azure_link(pr, &id),
                         id,
+                        remark,
                     })
                 })
                 .collect(),
@@ -87,6 +82,37 @@ impl Poster for CliPoster {
             }
         }
     }
+}
+
+fn azure_post((url, body): &(String, Value)) -> Result<Value> {
+    run(
+        "az",
+        &[
+            "rest",
+            "--method",
+            "post",
+            "--uri",
+            url,
+            "--resource",
+            AZURE_DEVOPS,
+            "--headers",
+            "Content-Type=application/json",
+            "--body",
+            &body.to_string(),
+        ],
+        None,
+    )
+}
+
+/// What to tell the reviewer when a thread was posted on the right side only.
+fn right_remark(note: &Note) -> Option<String> {
+    let (first, last) = note.span(NoteSide::New)?;
+    let lines = if first == last {
+        first.to_string()
+    } else {
+        format!("{first}\u{2013}{last}")
+    };
+    Some(format!("Azure DevOps highlights {lines} only"))
 }
 
 fn head_commit(dir: &Path, pr: &PullRequest) -> Result<String> {
@@ -137,6 +163,7 @@ fn github_link(created: &Value) -> Link {
     Link {
         id: id_of(created),
         url: created["html_url"].as_str().unwrap_or_default().to_string(),
+        remark: None,
     }
 }
 
@@ -172,23 +199,70 @@ pub fn azure_thread(pr: &PullRequest, note: &Note) -> (String, Value) {
     if note.is_general() {
         return (url, json!({ "comments": comments, "status": "active" }));
     }
-    // A line-only anchor is rejected: the offsets are required, and 1 → 2 marks the
-    // start of the line.
-    let start = json!({ "line": note.line, "offset": 1 });
-    let end = json!({ "line": note.line, "offset": 2 });
-    let mut context = json!({ "filePath": format!("/{}", note.path) });
-    let (start_key, end_key) = match note.side {
-        NoteSide::New => ("rightFileStart", "rightFileEnd"),
-        NoteSide::Old => ("leftFileStart", "leftFileEnd"),
+    (url, azure_body(note, comments))
+}
+
+/// The thread for a block that takes in removed rows along with others, anchored on
+/// the right side only; `None` for any other note. Azure DevOps may refuse the
+/// two-sided thread, and this one still shows the added lines.
+pub fn azure_thread_right_only(pr: &PullRequest, note: &Note) -> Option<(String, Value)> {
+    note.old_lines.zip(note.new_lines)?;
+    let (url, mut body) = azure_thread(pr, note);
+    let context = body["threadContext"].as_object_mut()?;
+    context.remove("leftFileStart");
+    context.remove("leftFileEnd");
+    Some((url, body))
+}
+
+/// The offset just past a line's last character, and at least 2: a line-only anchor is
+/// rejected and 1 → 2 marks the start of the line.
+fn end_offset(line: &str) -> usize {
+    (line.chars().count() + 1).max(2)
+}
+
+fn azure_body(note: &Note, comments: Value) -> Value {
+    let anchor = |first: usize, last: usize, end: usize| {
+        (
+            json!({ "line": first, "offset": 1 }),
+            json!({ "line": last, "offset": end }),
+        )
     };
-    context[start_key] = start;
-    context[end_key] = end;
-    let body = json!({
+    let mut context = json!({ "filePath": format!("/{}", note.path) });
+    let mut put = |side: NoteSide, (start, end): (Value, Value)| {
+        let (start_key, end_key) = match side {
+            NoteSide::New => ("rightFileStart", "rightFileEnd"),
+            NoteSide::Old => ("leftFileStart", "leftFileEnd"),
+        };
+        context[start_key] = start;
+        context[end_key] = end;
+    };
+    if let Some((old, new)) = note.old_lines.zip(note.new_lines) {
+        // Each row of a mixed block's code starts with its marker.
+        let end = |markers: &[char]| {
+            let row = note.code.lines().rfind(|row| row.starts_with(markers));
+            end_offset(row.map_or("", |row| &row[1..]))
+        };
+        put(NoteSide::Old, anchor(old.0, old.1, end(&['-'])));
+        put(NoteSide::New, anchor(new.0, new.1, end(&['+', ' '])));
+    } else if note.is_block() {
+        let (first, last) = (note.first().1, note.last().1);
+        let end = end_offset(note.code.lines().last().unwrap_or_default());
+        put(note.side, anchor(first, last, end));
+    } else {
+        put(note.side, anchor(note.line, note.line, 2));
+    }
+    json!({
         "comments": comments,
         "status": "active",
         "threadContext": context,
-    });
-    (url, body)
+    })
+}
+
+fn github_side(side: NoteSide) -> &'static str {
+    match side {
+        NoteSide::New => "RIGHT",
+        NoteSide::Old => "LEFT",
+    }
 }
 
 /// The `gh api` arguments that comment on the note's line at the PR's head commit, or,
@@ -208,26 +282,28 @@ pub fn github_comment(pr: &PullRequest, note: &Note, head: &str, on_file: bool) 
         format!("path={}", note.path),
     ];
     if on_file {
-        let which = match note.side {
-            NoteSide::New => "Line",
-            NoteSide::Old => "Removed line",
-        };
         args.extend([
             "-f".to_string(),
             "subject_type=file".to_string(),
             "-f".to_string(),
-            format!("body={which} {}: {}", note.line, note.text.trim()),
+            format!("body={}: {}", note.lines_text(), note.text.trim()),
         ]);
     } else {
-        let side = match note.side {
-            NoteSide::New => "RIGHT",
-            NoteSide::Old => "LEFT",
-        };
+        if note.is_block() {
+            let (side, line) = note.first();
+            args.extend([
+                "-F".to_string(),
+                format!("start_line={line}"),
+                "-f".to_string(),
+                format!("start_side={}", github_side(side)),
+            ]);
+        }
+        let (side, line) = note.last();
         args.extend([
             "-F".to_string(),
-            format!("line={}", note.line),
+            format!("line={line}"),
             "-f".to_string(),
-            format!("side={side}"),
+            format!("side={}", github_side(side)),
             "-f".to_string(),
             format!("body={}", note.text.trim()),
         ]);
@@ -263,15 +339,19 @@ pub fn github_review(pr: &PullRequest, notes: &[Note], head: &str) -> (Vec<Strin
         .iter()
         .filter(|note| !note.is_general())
         .map(|note| {
-            json!({
+            let (side, line) = note.last();
+            let mut comment = json!({
                 "path": note.path,
-                "line": note.line,
-                "side": match note.side {
-                    NoteSide::New => "RIGHT",
-                    NoteSide::Old => "LEFT",
-                },
+                "line": line,
+                "side": github_side(side),
                 "body": note.text.trim(),
-            })
+            });
+            if note.is_block() {
+                let (start_side, start_line) = note.first();
+                comment["start_line"] = json!(start_line);
+                comment["start_side"] = json!(github_side(start_side));
+            }
+            comment
         })
         .collect();
     (args, body)
@@ -387,6 +467,11 @@ pub fn offer_upload(
         match result {
             Ok(link) => posted.push((note.clone(), link)),
             Err(error) => writeln!(out, "  could not post {}: {error:#}", note.place())?,
+        }
+    }
+    for (note, link) in &posted {
+        if let Some(remark) = &link.remark {
+            writeln!(out, "  {}: {remark}", note.place())?;
         }
     }
     store.record_posted(&posted)?;

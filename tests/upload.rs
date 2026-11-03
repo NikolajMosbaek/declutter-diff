@@ -2,9 +2,10 @@ use std::cell::RefCell;
 
 use anyhow::{Result, bail};
 use declutter::pr::{PullRequest, Repo};
-use declutter::store::{Link, Note, NoteSide, NoteStore};
+use declutter::store::{End, Link, Note, NoteSide, NoteStore};
 use declutter::upload::{
-    Poster, azure_link, azure_thread, github_comment, github_review, offer_upload,
+    Poster, azure_link, azure_thread, azure_thread_right_only, github_comment, github_review,
+    offer_upload,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -147,6 +148,7 @@ impl Poster for Recorder {
                 Ok(Link {
                     id: note.line.to_string(),
                     url: format!("https://example.com/{}", note.line),
+                    ..Default::default()
                 })
             })
             .collect()
@@ -362,4 +364,160 @@ fn github_gets_one_review_with_the_line_notes_as_its_comments() {
             ],
         })
     );
+}
+
+type Spans = Option<((usize, usize), (usize, usize))>;
+
+fn block(first: End, last: End, spans: Spans, code: &str, text: &str) -> Note {
+    Note {
+        end_side: (last.0 != first.0).then_some(last.0),
+        end_line: Some(last.1),
+        old_lines: spans.map(|(old, _)| old),
+        new_lines: spans.map(|(_, new)| new),
+        code: code.into(),
+        ..note("a.ts", first.0, first.1, text)
+    }
+}
+
+fn mixed() -> Note {
+    block(
+        (NoteSide::Old, 3),
+        (NoteSide::New, 8),
+        Some(((3, 3), (7, 8))),
+        "-  return a;\n+  const t = 1;\n+  return t;",
+        "x",
+    )
+}
+
+#[test]
+fn an_azure_thread_on_a_block_spans_its_lines() {
+    for (side, start, end) in [
+        (NoteSide::New, "rightFileStart", "rightFileEnd"),
+        (NoteSide::Old, "leftFileStart", "leftFileEnd"),
+    ] {
+        let mut note = block((side, 11), (side, 13), None, "a\nbb\nccc", "x");
+        note.path = "src/Cart.swift".into();
+        let (_, body) = azure_thread(&azure_pr(), &note);
+        assert_eq!(
+            body["threadContext"],
+            json!({
+                "filePath": "/src/Cart.swift",
+                start: { "line": 11, "offset": 1 },
+                end: { "line": 13, "offset": 4 },
+            })
+        );
+    }
+}
+
+#[test]
+fn a_mixed_block_sends_both_sides_and_can_fall_back_to_the_right() {
+    let note = mixed();
+    let (_, body) = azure_thread(&azure_pr(), &note);
+    assert_eq!(
+        body["threadContext"],
+        json!({
+            "filePath": "/a.ts",
+            "leftFileStart": { "line": 3, "offset": 1 },
+            "leftFileEnd": { "line": 3, "offset": 12 },
+            "rightFileStart": { "line": 7, "offset": 1 },
+            "rightFileEnd": { "line": 8, "offset": 12 },
+        })
+    );
+
+    let (_, right) = azure_thread_right_only(&azure_pr(), &note).expect("a mixed block");
+    assert_eq!(
+        right["threadContext"],
+        json!({
+            "filePath": "/a.ts",
+            "rightFileStart": { "line": 7, "offset": 1 },
+            "rightFileEnd": { "line": 8, "offset": 12 },
+        })
+    );
+
+    let plain = block(
+        (NoteSide::New, 11),
+        (NoteSide::New, 13),
+        None,
+        "a\nb\nc",
+        "x",
+    );
+    assert!(azure_thread_right_only(&azure_pr(), &plain).is_none());
+}
+
+#[test]
+fn github_comments_on_a_block_start_at_its_first_line() {
+    let note = mixed();
+    let (_, body) = github_review(&github_pr(), std::slice::from_ref(&note), "abc123");
+    assert_eq!(
+        body["comments"][0],
+        json!({
+            "path": "a.ts", "start_line": 3, "start_side": "LEFT",
+            "line": 8, "side": "RIGHT", "body": "x",
+        })
+    );
+
+    let args = github_comment(&github_pr(), &note, "abc123", false);
+    let at = |needle: &str| {
+        args.iter()
+            .position(|arg| arg == needle)
+            .unwrap_or_else(|| panic!("{needle} in {args:?}"))
+    };
+    assert!(at("start_line=3") < at("start_side=LEFT"));
+    assert!(at("start_side=LEFT") < at("line=8"));
+    assert!(at("line=8") < at("side=RIGHT"));
+
+    let range = block(
+        (NoteSide::New, 11),
+        (NoteSide::New, 13),
+        None,
+        "a\nb\nc",
+        "x",
+    );
+    let on_file = github_comment(&github_pr(), &range, "abc123", true);
+    assert!(
+        on_file.contains(&"body=Lines 11\u{2013}13: x".to_string()),
+        "{on_file:?}"
+    );
+    let on_file = github_comment(&github_pr(), &note, "abc123", true);
+    assert!(
+        on_file.contains(&"body=Removed line 3 to line 8: x".to_string()),
+        "{on_file:?}"
+    );
+}
+
+struct Narrowed;
+
+impl Poster for Narrowed {
+    fn post(&self, _: &PullRequest, notes: &[Note]) -> Vec<Result<Link>> {
+        notes
+            .iter()
+            .map(|_| {
+                Ok(Link {
+                    remark: Some("Azure DevOps highlights 7\u{2013}8 only".into()),
+                    ..Default::default()
+                })
+            })
+            .collect()
+    }
+}
+
+#[test]
+fn a_thread_narrowed_to_one_side_is_reported_after_posting() {
+    let dir = TempDir::new().expect("temp dir");
+    let mut store = NoteStore::at(dir.path().join("notes.json")).scoped("PR 42");
+    store.set(mixed()).expect("save");
+    let mut out = Vec::new();
+    offer_upload(
+        &mut store,
+        &azure_pr(),
+        &Narrowed,
+        true,
+        &mut "".as_bytes(),
+        &mut out,
+    )
+    .expect("offer");
+    let out = String::from_utf8(out).expect("utf8");
+    let said = "  `a.ts` (removed line 3 to line 8): Azure DevOps highlights 7\u{2013}8 only\n";
+    let summary = out.find("Posted 1 comment").expect("summary");
+    assert!(out.find(said).expect(&out) < summary, "{out}");
 }

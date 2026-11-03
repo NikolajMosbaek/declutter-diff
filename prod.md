@@ -140,6 +140,8 @@ changes, with correct line numbers, and toggling back restores the full diff.
 - Notes from outside the viewer (`declutter notes add`), as drafts; a note on the change as
   a whole (`P`); multi-line notes; posting without the viewer (`declutter notes post`); one
   GitHub review instead of a comment per note; a log of what was posted, with links.
+- Notes on a block of lines (`V` in the viewer, `--line 11-13` / `"end_line"` for agents),
+  posted as one comment covering the range.
 
 ### Decisions made while opening notes to coding agents
 
@@ -155,6 +157,8 @@ changes, with correct line numbers, and toggling back restores the full diff.
 - **Existing PR threads are not drawn** (for now). Their anchors drift as the PR moves —
   Azure DevOps anchors to an iteration, GitHub marks comments outdated — so markers would
   land on the wrong lines. An agent can check the threads itself before adding notes.
+- **A block is every diff row between its ends.** If Azure DevOps refuses a thread
+  anchored on both sides, it is posted on the right side and the reviewer is told.
 
 ## Roadmap
 

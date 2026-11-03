@@ -162,6 +162,9 @@ pub enum Added {
 pub struct Link {
     pub id: String,
     pub url: String,
+    /// Something to tell the reviewer about how it was posted; never stored.
+    #[serde(skip)]
+    pub remark: Option<String>,
 }
 
 /// A note as it was posted, kept in `posted.jsonl` next to the notes.
