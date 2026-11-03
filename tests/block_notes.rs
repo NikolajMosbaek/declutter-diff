@@ -356,3 +356,175 @@ fn m_on_any_line_of_a_block_reopens_it_and_saving_keeps_its_range() {
     assert!(!all[0].draft);
     assert_eq!(all[0].text, "Check the bounds.");
 }
+
+fn press(app: &mut App, keys: &[KeyCode]) {
+    for &code in keys {
+        app.handle_key(key(code));
+    }
+}
+
+fn type_note(app: &mut App, text: &str) {
+    app.handle_key(key(KeyCode::Char('m')));
+    for c in text.chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+}
+
+fn v() -> KeyCode {
+    KeyCode::Char('V')
+}
+
+fn j() -> KeyCode {
+    KeyCode::Char('j')
+}
+
+#[test]
+fn v_then_j_j_then_m_notes_the_block_hidden_lines_included() {
+    let mut app = cart_app(NoteStore::in_memory());
+    press(&mut app, &[v(), j(), j()]);
+    assert_eq!(app.cursor, 4);
+    assert!(
+        screen(&mut app, 120, 20)
+            .contains("-- BLOCK  cart.ts:2–5 (4 lines) · j/k extend · m note · Esc cancel --")
+    );
+    type_note(&mut app, "Bounds?");
+    let all = app.notes.notes();
+    assert_eq!(all.len(), 1);
+    assert_eq!((all[0].first(), all[0].last()), ((New, 2), (New, 5)));
+    assert_eq!(all[0].code.lines().count(), 4);
+    assert!(!all[0].draft);
+    assert!(!screen(&mut app, 120, 20).contains("-- BLOCK"));
+}
+
+#[test]
+fn a_block_from_a_removed_line_into_added_ones_covers_both() {
+    let mut app = cart_app(NoteStore::in_memory());
+    press(&mut app, &[j(), j(), j(), j()]);
+    assert_eq!(app.cursor, 6);
+    press(&mut app, &[v(), j(), j()]);
+    type_note(&mut app, "x");
+    let all = app.notes.notes();
+    assert_eq!(all.len(), 1);
+    assert_eq!((all[0].first(), all[0].last()), ((Old, 3), (New, 8)));
+    assert_eq!(
+        (all[0].old_lines, all[0].new_lines),
+        (Some((3, 3)), Some((7, 8)))
+    );
+}
+
+#[test]
+fn esc_cancels_the_selection_and_leaving_the_file_or_a_layer_key_does_too() {
+    let blocking = |app: &mut App| screen(app, 120, 20).contains("-- BLOCK");
+    let mut app = cart_app(NoteStore::in_memory());
+    press(&mut app, &[v(), j()]);
+    assert!(blocking(&mut app));
+    press(&mut app, &[KeyCode::Esc]);
+    assert!(!blocking(&mut app));
+    assert_eq!(app.focus, declutter::tui::Focus::Diff);
+    assert_eq!(app.cursor, 3);
+
+    let other = FileReview::new(FileChange {
+        path: "other.ts".to_string(),
+        old_path: None,
+        status: ChangeStatus::Modified,
+        old: Some("a\n".to_string()),
+        new: Some("b\n".to_string()),
+        binary: false,
+    });
+    let mut two = App::with_stores(
+        vec![cart(), other],
+        Layers::default(),
+        ReviewStore::in_memory(),
+        NoteStore::in_memory(),
+    );
+    press(&mut two, &[KeyCode::Right, v()]);
+    assert!(blocking(&mut two));
+    press(&mut two, &[KeyCode::Char('}')]);
+    assert!(!blocking(&mut two));
+    press(&mut two, &[KeyCode::Char('m'), KeyCode::Enter]);
+    assert!(two.notes.notes().iter().all(|n| n.path == "other.ts"));
+
+    for cancel in [KeyCode::Tab, KeyCode::Char('c')] {
+        let mut app = cart_app(NoteStore::in_memory());
+        press(&mut app, &[v(), j()]);
+        assert!(blocking(&mut app));
+        press(&mut app, &[cancel]);
+        assert!(!blocking(&mut app));
+        assert!(app.notes.notes().is_empty());
+    }
+}
+
+#[test]
+fn a_selection_stays_inside_its_hunk() {
+    let old: String = (1..=30).map(|n| format!("line {n}\n")).collect();
+    let new = old
+        .replace("line 5\n", "five\n")
+        .replace("line 25\n", "25!\n");
+    let file = FileReview::new(FileChange {
+        path: "long.ts".to_string(),
+        old_path: None,
+        status: ChangeStatus::Modified,
+        old: Some(old),
+        new: Some(new),
+        binary: false,
+    });
+    let mut app = App::with_stores(
+        vec![file],
+        Layers::default(),
+        ReviewStore::in_memory(),
+        NoteStore::in_memory(),
+    );
+    press(&mut app, &[KeyCode::Right]);
+    assert_eq!(app.cursor, 4);
+    press(&mut app, &[v(), KeyCode::Char('G')]);
+    assert_eq!(app.cursor, 8);
+    press(&mut app, &[KeyCode::Char('g')]);
+    assert_eq!(app.cursor, 1);
+}
+
+#[test]
+fn v_then_m_on_one_line_inside_a_block_makes_a_line_note() {
+    let notes = seeded((New, 2), (New, 5), "block", false);
+    let mut app = cart_app(notes);
+    press(&mut app, &[KeyCode::Down, v()]);
+    assert!(screen(&mut app, 120, 20).contains("(1 line)"));
+    type_note(&mut app, "x");
+    assert_eq!(app.notes.notes().len(), 2);
+    assert_eq!(texts(app.notes.find("cart.ts", New, 4)), Some("x"));
+}
+
+#[test]
+fn esc_in_the_editor_forgets_the_block_it_was_for() {
+    let mut app = cart_app(NoteStore::in_memory());
+    press(&mut app, &[v(), j(), KeyCode::Char('m'), KeyCode::Esc]);
+    assert_eq!(app.input, None);
+    press(&mut app, &[j()]);
+    type_note(&mut app, "x");
+    let all = app.notes.notes();
+    assert_eq!(all.len(), 1);
+    assert!(!all[0].is_block());
+    assert_eq!(all[0].first(), (New, 5));
+}
+
+#[test]
+fn v_on_a_header_says_where_to_put_the_cursor_and_v_again_cancels() {
+    let mut app = cart_app(NoteStore::in_memory());
+    press(&mut app, &[KeyCode::Home, v()]);
+    assert!(screen(&mut app, 120, 20).contains("put the cursor on a code line to select from it"));
+    press(&mut app, &[j(), v(), v()]);
+    assert!(!screen(&mut app, 120, 20).contains("-- BLOCK"));
+}
+
+#[test]
+fn v_from_the_file_list_moves_into_the_diff_and_selects() {
+    let mut app = App::with_stores(
+        vec![cart()],
+        Layers::default(),
+        ReviewStore::in_memory(),
+        NoteStore::in_memory(),
+    );
+    press(&mut app, &[v()]);
+    assert_eq!(app.focus, declutter::tui::Focus::Diff);
+    assert!(screen(&mut app, 120, 20).contains("-- BLOCK  cart.ts:2 (1 line)"));
+}

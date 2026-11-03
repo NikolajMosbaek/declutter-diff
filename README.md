@@ -229,6 +229,7 @@ Viewer keys:
 | `/` `n` `N` | search the diff; next / previous match (smart case) |
 | `r` | mark the file reviewed and jump to the next unreviewed one (again to unmark) |
 | `m` | leave a note on the line under the cursor, or open the draft there (`Alt+Enter`: new line — on macOS, with the terminal's "Use Option as Meta" on) |
+| `V` | select a block of lines: `j` `k` (or any move key) extend it within its hunk, `m` notes it, `Esc` cancels |
 | `P` | leave a note on the change as a whole |
 | `E` | copy all notes to the clipboard as one prompt for a coding agent |
 | `o` | open the file in `$VISUAL` / `$EDITOR` at the cursor's line |

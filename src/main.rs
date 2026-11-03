@@ -71,7 +71,7 @@ KEYS (viewer; press ? for the full list):
     Space  b    page down / up; d u half a page; g G top / bottom
     /  n  N     search; next / previous match
     r           mark the file reviewed and go to the next one
-    m  E  o     note a line; copy all notes as a prompt; open in $EDITOR
+    m  V  E  o  note a line, or a block (V, then j/k, m); copy all notes as a prompt; open in $EDITOR
     c t i l f   hide / show comments, tests, imports, logging, formatting
     C T I L F   show only that layer (again to go back)
     a           all filters off, and back on

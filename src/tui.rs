@@ -59,6 +59,7 @@ const KEYS: [&[KeyGroup]; 2] = [
             &[
                 ("r", "mark reviewed, go to the next file"),
                 ("m", "note the line under the cursor"),
+                ("V", "select lines for one note: j/k extend, m note"),
                 ("P", "note on the change as a whole"),
                 ("Alt+⏎", "new line, while writing a note"),
                 ("E", "copy all notes as one prompt"),
@@ -122,6 +123,8 @@ struct DiffView {
     anchors: Vec<Option<Anchor>>,
     /// For each line that shows code, that code, for search.
     texts: Vec<Option<String>>,
+    /// For each line, the hunk it is in; `None` for headers and blank lines.
+    hunk_of: Vec<Option<usize>>,
     /// The first changed line of each hunk.
     changes: Vec<usize>,
 }
@@ -157,6 +160,8 @@ pub struct App {
     input_cursor: usize,
     /// The range the open note editor writes to: both ends the same for a line note.
     editing: Option<(End, End)>,
+    /// Where the block being selected with `V` started.
+    selection: Option<End>,
     /// The last search, highlighted in the diff until cleared with Esc.
     pub search: Option<String>,
     pub show_help: bool,
@@ -216,6 +221,7 @@ impl App {
             input: None,
             input_cursor: 0,
             editing: None,
+            selection: None,
             search: None,
             show_help: false,
             message: None,
@@ -289,9 +295,21 @@ impl App {
         }
         if self.input.is_some() {
             self.handle_input_key(key);
+            if self.input.is_none() {
+                self.settle_selection(self.selected_file());
+            }
             return;
         }
         self.message = None;
+        if self.selection.is_some() {
+            self.handle_selecting_key(key);
+            return;
+        }
+        self.act(key);
+    }
+
+    /// What a key does outside the input prompts.
+    fn act(&mut self, key: KeyEvent) {
         let half_page = (self.diff_height / 2).max(1);
         let page = self.diff_height.saturating_sub(1).max(1);
         match key.code {
@@ -341,6 +359,7 @@ impl App {
 
             KeyCode::Char('r') => self.toggle_reviewed(),
             KeyCode::Char('m') => self.open_note(),
+            KeyCode::Char('V') => self.start_selection(),
             KeyCode::Char('P') => self.open_general_note(),
             KeyCode::Char('E') => self.export_notes(),
             KeyCode::Char('o') => self.request_open(),
@@ -382,7 +401,10 @@ impl App {
                 .map_or(text.len(), |(i, _)| i)
         };
         match key.code {
-            KeyCode::Esc => self.input = None,
+            KeyCode::Esc => {
+                self.input = None;
+                self.editing = None;
+            }
             // Terminals send Enter for Shift+Enter; Alt+Enter is the one that comes through.
             KeyCode::Enter
                 if is_note
@@ -686,9 +708,6 @@ impl App {
     }
 
     fn save_note(&mut self, text: String) {
-        let Some((path, anchor)) = self.cursor_anchor() else {
-            return;
-        };
         let range = self.editing.take();
         if let Some((first, last)) = range
             && first != last
@@ -705,6 +724,9 @@ impl App {
             }
             return;
         }
+        let Some((path, anchor)) = self.cursor_anchor() else {
+            return;
+        };
         let note = Note {
             path,
             side: anchor.side,
@@ -784,6 +806,138 @@ impl App {
         self.open_request = Some((path, line));
     }
 
+    /// The selected file's index into `files`, to tell whether a key changed the file.
+    fn selected_file(&self) -> Option<usize> {
+        self.visible.get(self.selected).copied()
+    }
+
+    /// `V`: starts a block at the cursor's line. From the file list it moves into the
+    /// diff first.
+    fn start_selection(&mut self) {
+        if self.focus == Focus::Files {
+            self.focus = Focus::Diff;
+            self.go_to_first_change();
+        }
+        let Some((_, anchor)) = self.cursor_anchor() else {
+            self.message = Some("put the cursor on a code line to select from it".to_string());
+            return;
+        };
+        self.selection = Some((anchor.side, anchor.line));
+    }
+
+    /// A key while a block is being selected: moving extends it, `m` notes it, `V` and
+    /// Esc cancel it, and any other key cancels it and then does what it always does.
+    fn handle_selecting_key(&mut self, key: KeyEvent) {
+        let extends = matches!(
+            key.code,
+            KeyCode::Char(
+                'j' | 'k' | ' ' | 'b' | 'd' | 'u' | 'g' | 'G' | ']' | '[' | 'n' | 'N' | '/'
+            ) | KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::PageUp
+                | KeyCode::PageDown
+                | KeyCode::Home
+                | KeyCode::End
+        );
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('V') => self.selection = None,
+            KeyCode::Char('m') => self.open_block_note(),
+            _ if extends => {
+                let file = self.selected_file();
+                self.act(key);
+                self.settle_selection(file);
+            }
+            _ => {
+                self.selection = None;
+                self.act(key);
+            }
+        }
+    }
+
+    /// After a key: cancels the selection if the file changed, focus left the diff or
+    /// its start is no longer shown; otherwise keeps the cursor inside the start's hunk.
+    fn settle_selection(&mut self, file: Option<usize>) {
+        let Some(start) = self.selection else {
+            return;
+        };
+        let view = self.diff_view();
+        let hunk = self
+            .start_line(&view, start)
+            .filter(|_| self.selected_file() == file && self.focus == Focus::Diff)
+            .and_then(|line| view.hunk_of[line]);
+        let Some(hunk) = hunk else {
+            self.selection = None;
+            return;
+        };
+        let lines = || (0..view.hunk_of.len()).filter(|&i| view.hunk_of[i] == Some(hunk));
+        if let (Some(first), Some(last)) = (lines().next(), lines().next_back()) {
+            self.move_cursor(self.cursor.clamp(first, last));
+        }
+    }
+
+    /// The pane line of the row `start` stands for.
+    fn start_line(&self, view: &DiffView, start: End) -> Option<usize> {
+        (0..view.lines.len()).find(|&i| {
+            view.texts[i].is_some()
+                && view.anchors[i]
+                    .as_ref()
+                    .is_some_and(|a| (a.side, a.line) == start)
+        })
+    }
+
+    /// The pane lines the selection runs over, from its top to its bottom.
+    fn selection_span(&self) -> Option<(usize, usize)> {
+        let start = self.start_line(&self.diff_view(), self.selection?)?;
+        Some((start.min(self.cursor), start.max(self.cursor)))
+    }
+
+    /// The selection's two ends in file terms, in pane order. A cursor on a line with
+    /// no code of its own takes the nearest code line towards the start.
+    fn selection_ends(&self) -> Option<(End, End)> {
+        let view = self.diff_view();
+        let start = self.start_line(&view, self.selection?)?;
+        let end_of = |line: usize| view.anchors[line].as_ref().map(|a| (a.side, a.line));
+        let towards = if self.cursor >= start {
+            (start..=self.cursor.min(view.anchors.len() - 1))
+                .rev()
+                .find_map(end_of)
+        } else {
+            (self.cursor..=start).find_map(end_of)
+        }?;
+        let start_end = end_of(start)?;
+        Some(if self.cursor >= start {
+            (start_end, towards)
+        } else {
+            (towards, start_end)
+        })
+    }
+
+    /// `-- BLOCK …` for the status line while a block is being selected.
+    fn block_status(&self) -> Option<String> {
+        let (first, last) = self.selection_ends()?;
+        let note = Note::block(self.current()?, first, last, "");
+        let lines = note.code.lines().count();
+        Some(format!(
+            "-- BLOCK  {} ({lines} line{}) · j/k extend · m note · Esc cancel --",
+            note.place().replace('`', ""),
+            if lines == 1 { "" } else { "s" },
+        ))
+    }
+
+    /// `m` while selecting: opens the editor on the block, pre-filled when that exact
+    /// range already has a note.
+    fn open_block_note(&mut self) {
+        let ends = self.selection_ends();
+        self.selection = None;
+        let (Some((first, last)), Some(file)) = (ends, self.current()) else {
+            return;
+        };
+        let existing = self.notes.find_block(&file.path, first, last);
+        let text = existing.map(|note| note.text.clone()).unwrap_or_default();
+        self.editing = Some((first, last));
+        self.start_input(Input::Note(text));
+    }
+
     fn cursor_anchor(&self) -> Option<(String, Anchor)> {
         let path = self.current()?.path.clone();
         let anchor = self
@@ -856,6 +1010,7 @@ impl App {
             lines: vec![Line::from(text).dim()],
             anchors: vec![None],
             texts: vec![None],
+            hunk_of: vec![None],
             changes: Vec::new(),
         };
         let Some(file) = self.visible.get(position).map(|&index| &self.files[index]) else {
@@ -882,15 +1037,18 @@ impl App {
             lines: Vec::new(),
             anchors: Vec::new(),
             texts: Vec::new(),
+            hunk_of: Vec::new(),
             changes: Vec::new(),
         };
         let push = |out: &mut DiffView,
                     line: Line<'static>,
                     anchor: Option<Anchor>,
-                    text: Option<String>| {
+                    text: Option<String>,
+                    hunk: Option<usize>| {
             out.lines.push(line);
             out.anchors.push(anchor);
             out.texts.push(text);
+            out.hunk_of.push(hunk);
         };
         let notes: Vec<&Note> = self
             .notes
@@ -923,11 +1081,12 @@ impl App {
         }
         for (hunk_index, hunk) in view.hunks.iter().enumerate() {
             if hunk_index > 0 {
-                push(&mut out, Line::from(""), None, None);
+                push(&mut out, Line::from(""), None, None, None);
             }
             push(
                 &mut out,
                 Line::from(hunk.header()).fg(Color::Cyan),
+                None,
                 None,
                 None,
             );
@@ -953,6 +1112,7 @@ impl App {
                             .italic(),
                         None,
                         None,
+                        Some(hunk_index),
                     );
                 }
                 if moved.is_some() && self.collapse_moves {
@@ -978,11 +1138,12 @@ impl App {
                     ),
                     anchor.clone(),
                     Some(row.text.clone()),
+                    Some(hunk_index),
                 );
                 if let Some(anchor) = anchor {
                     for note in under.get(&(hunk_index, row_index)).into_iter().flatten() {
                         for line in note_lines(note, self.diff_width) {
-                            push(&mut out, line, Some(anchor.clone()), None);
+                            push(&mut out, line, Some(anchor.clone()), None, Some(hunk_index));
                         }
                     }
                 }
@@ -1159,7 +1320,7 @@ fn row_line(
             line.fg(sign_colour).add_modifier(Modifier::BOLD),
         ),
         if bar {
-            Span::styled("▎", Style::new().fg(Color::Yellow))
+            Span::styled("▎", line.fg(Color::Yellow))
         } else {
             Span::styled(" ", line)
         },
@@ -1255,6 +1416,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     app.cursor = app.cursor.min(lines.len().saturating_sub(1));
     app.scroll = app.scroll.min(lines.len().saturating_sub(app.diff_height));
     app.keep_cursor_visible();
+    let selected = app.selection_span();
     let lines: Vec<Line> = lines
         .into_iter()
         .enumerate()
@@ -1262,6 +1424,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             let on_cursor = app.focus == Focus::Diff && i == app.cursor;
             let gutter = if on_cursor {
                 Span::styled("▌", Style::new().fg(Color::Cyan))
+            } else if selected.is_some_and(|(top, bottom)| (top..=bottom).contains(&i)) {
+                Span::styled("▌", Style::new().fg(Color::Yellow))
             } else {
                 Span::raw(" ")
             };
@@ -1292,20 +1456,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             with_cursor(query, app.input_cursor)
         ),
         (None, Some(message)) => message.clone(),
-        (None, None) => format!(
-            "{}{} · {reviewed}/{listed} reviewed{}",
-            drafts_status(&app.notes),
-            Summary::new(&app.files, app.layers).status_line(app.layers),
-            notes_status(&app.notes)
-                + &match (app.moved_blocks(), app.collapse_moves) {
-                    (0, _) => String::new(),
-                    (n, collapsed) => format!(
-                        " · {n} moved block{}{}",
-                        if n == 1 { "" } else { "s" },
-                        if collapsed { " (collapsed)" } else { "" }
-                    ),
-                }
-        ),
+        (None, None) => app.block_status().unwrap_or_else(|| {
+            format!(
+                "{}{} · {reviewed}/{listed} reviewed{}",
+                drafts_status(&app.notes),
+                Summary::new(&app.files, app.layers).status_line(app.layers),
+                notes_status(&app.notes)
+                    + &match (app.moved_blocks(), app.collapse_moves) {
+                        (0, _) => String::new(),
+                        (n, collapsed) => format!(
+                            " · {n} moved block{}{}",
+                            if n == 1 { "" } else { "s" },
+                            if collapsed { " (collapsed)" } else { "" }
+                        ),
+                    }
+            )
+        }),
     };
     frame.render_widget(
         Paragraph::new(format!(" {summary}")).style(Style::new().add_modifier(Modifier::REVERSED)),
