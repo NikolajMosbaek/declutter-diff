@@ -41,14 +41,27 @@ impl Note {
     /// side, any other block quotes the version it is on. An end that is not in the
     /// diff — the viewer can pick one its decluttered view shows but the full diff does
     /// not — makes the block a single-sided one, quoted from the first end's version.
-    /// Never fails, and is not a draft; one line is a line note.
-    pub fn block(file: &FileReview, first: End, last: End, text: impl Into<String>) -> Note {
+    /// Ends given out of diff order are swapped, so the note runs from first to last as
+    /// the diff reads. Never fails, and is not a draft; one line is a line note.
+    pub fn block(
+        file: &FileReview,
+        mut first: End,
+        mut last: End,
+        text: impl Into<String>,
+    ) -> Note {
         let view = file.view(DiffModes::SHOWN);
         let rows: Vec<&Row> = view.hunks.iter().flat_map(|hunk| &hunk.rows).collect();
         let start = rows.iter().position(|row| is_at(row, first));
         let end = rows.iter().rposition(|row| is_at(row, last));
+        let (start, end) = match (start, end) {
+            (Some(a), Some(b)) if a > b => {
+                std::mem::swap(&mut first, &mut last);
+                (Some(b), Some(a))
+            }
+            both => both,
+        };
         let covered = match (start, end) {
-            (Some(start), Some(end)) if start <= end => &rows[start..=end],
+            (Some(start), Some(end)) => &rows[start..=end],
             _ => &[],
         };
 

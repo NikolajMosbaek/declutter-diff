@@ -216,3 +216,18 @@ fn a_block_end_outside_the_diff_quotes_the_first_ends_side() {
     assert_eq!(note.code, "  return { ...cart, total };\n}");
     assert_eq!((note.old_lines, note.new_lines), (None, None));
 }
+
+#[test]
+fn a_block_runs_from_first_to_last_in_diff_order_whichever_way_it_is_given() {
+    let down = Note::block(&cart(), (NoteSide::New, 6), (NoteSide::Old, 3), "x");
+    let up = Note::block(&cart(), (NoteSide::Old, 3), (NoteSide::New, 6), "x");
+    assert_eq!(down, up);
+    assert_eq!(
+        (down.first(), down.last()),
+        ((NoteSide::New, 6), (NoteSide::Old, 3))
+    );
+
+    let forward = Note::block(&cart(), (NoteSide::New, 7), (NoteSide::New, 8), "x");
+    let backward = Note::block(&cart(), (NoteSide::New, 8), (NoteSide::New, 7), "x");
+    assert_eq!(forward, backward);
+}
