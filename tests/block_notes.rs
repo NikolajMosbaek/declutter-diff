@@ -827,3 +827,52 @@ fn a_block_with_an_end_in_neither_diff_never_runs_backwards_or_loses_a_side() {
     assert!(across.covers(Old, 3) && across.covers(New, 40));
     assert!(!across.covers(New, 3) && !across.covers(Old, 40));
 }
+
+#[test]
+fn a_block_note_sits_under_its_last_row_still_shown_when_moved_rows_collapse() {
+    let block = "fn validate(a: i32) -> bool {\n    a > 0\n}\nfn other() {}\n";
+    let fill = "f1\nf2\nf3\nf4\nf5\n";
+    let file = FileReview::new(FileChange {
+        path: "m.rs".to_string(),
+        old_path: None,
+        status: ChangeStatus::Modified,
+        old: Some(format!("k1\nk2\n{block}{fill}")),
+        new: Some(format!("k1\nk2\n{fill}{block}")),
+        binary: false,
+    });
+    let mut notes = NoteStore::in_memory();
+    let note = Note::block(&file, DiffModes::SHOWN, (New, 2), (Old, 6), "x");
+    assert_eq!(
+        (note.old_lines, note.new_lines),
+        (Some((3, 6)), Some((2, 2)))
+    );
+    notes.set(note).expect("seed");
+    let on_k2 = Note {
+        path: "m.rs".into(),
+        ..line(New, 2, "on k2")
+    };
+    notes.set(on_k2).expect("seed");
+    let mut app = App::with_stores(
+        vec![file],
+        Layers::default(),
+        ReviewStore::in_memory(),
+        notes,
+    );
+    press(&mut app, &[KeyCode::Right, KeyCode::Char('g')]);
+    let rows = pane(&mut app);
+    let at = |rows: &[String], text: &str| {
+        rows.iter()
+            .position(|row| row.contains(text))
+            .unwrap_or_else(|| panic!("{text} in {rows:#?}"))
+    };
+    assert_eq!(
+        at(&rows, "✎ 2 to removed 6 · x"),
+        at(&rows, "6       -▎fn other") + 1
+    );
+    press(&mut app, &[KeyCode::Char('M')]);
+    let rows = pane(&mut app);
+    assert!(rows[2].contains("2     2  ▎k2"), "{}", rows[2]);
+    assert!(rows[3].contains("✎ 2 to removed 6 · x"), "{}", rows[3]);
+    assert!(rows[4].contains("✎ on k2"), "{}", rows[4]);
+    assert!(rows[5].contains("lines moved to line 8"), "{}", rows[5]);
+}

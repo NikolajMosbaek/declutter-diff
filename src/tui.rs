@@ -893,7 +893,8 @@ impl App {
         };
         let lines = || (0..view.hunk_of.len()).filter(|&i| view.hunk_of[i] == Some(hunk));
         if let (Some(first), Some(last)) = (lines().next(), lines().next_back()) {
-            self.move_cursor(self.cursor.clamp(first, last));
+            self.cursor = self.cursor.clamp(first, last);
+            self.keep_cursor_visible();
         }
     }
 
@@ -921,22 +922,16 @@ impl App {
         }
     }
 
-    /// The pane lines the selection runs over, from its top to its bottom.
-    fn selection_span(&self) -> Option<(usize, usize)> {
-        self.selection_lines(&self.diff_view())
-    }
-
     /// The selection's two ends in file terms, in pane order.
-    fn selection_ends(&self) -> Option<(End, End)> {
-        let view = self.diff_view();
-        let (top, bottom) = self.selection_lines(&view)?;
-        let end_of = |line: usize| view.anchors[line].as_ref().map(|a| (a.side, a.line));
-        Some((end_of(top)?, end_of(bottom)?))
+    fn selection_ends(&self, view: &DiffView) -> Option<(End, End)> {
+        let (top, bottom) = self.selection_lines(view)?;
+        let end_at = |line: usize| view.anchors[line].as_ref().map(|a| (a.side, a.line));
+        Some((end_at(top)?, end_at(bottom)?))
     }
 
     /// `-- BLOCK …` for the status line while a block is being selected.
-    fn block_status(&self) -> Option<String> {
-        let (first, last) = self.selection_ends()?;
+    fn block_status(&self, view: &DiffView) -> Option<String> {
+        let (first, last) = self.selection_ends(view)?;
         let note = Note::block(self.current()?, self.layers, first, last, "");
         let lines = note.code.lines().count();
         Some(format!(
@@ -949,7 +944,7 @@ impl App {
     /// `m` while selecting: opens the editor on the block, pre-filled when that exact
     /// range already has a note.
     fn open_block_note(&mut self) {
-        let ends = self.selection_ends();
+        let ends = self.selection_ends(&self.diff_view());
         self.selection = None;
         let (Some((first, last)), Some(file)) = (ends, self.current()) else {
             return;
@@ -961,13 +956,13 @@ impl App {
     }
 
     fn cursor_anchor(&self) -> Option<(String, Anchor)> {
+        self.cursor_anchor_in(&self.diff_view())
+    }
+
+    /// The file and line the cursor is on in `view`, the current file's diff pane.
+    fn cursor_anchor_in(&self, view: &DiffView) -> Option<(String, Anchor)> {
         let path = self.current()?.path.clone();
-        let anchor = self
-            .diff_view()
-            .anchors
-            .into_iter()
-            .nth(self.cursor)
-            .flatten()?;
+        let anchor = view.anchors.get(self.cursor)?.clone()?;
         Some((path, anchor))
     }
 
@@ -1081,24 +1076,34 @@ impl App {
         let shown = |hunk_index: usize, row_index: usize| {
             !(self.collapse_moves && self.moves.contains_key(&(position, hunk_index, row_index)))
         };
-        // Each note goes under the last row it covers among the rows actually shown.
+        // In one pass over the rows: which rows a block covers (they get the bar), and
+        // the last row each note covers among the rows actually shown (it goes under it).
+        let mut barred: Vec<Vec<bool>> = view
+            .hunks
+            .iter()
+            .map(|hunk| vec![false; hunk.rows.len()])
+            .collect();
+        let mut last_shown: Vec<Option<(usize, usize)>> = vec![None; notes.len()];
+        for (h, hunk) in view.hunks.iter().enumerate() {
+            for (r, row) in hunk.rows.iter().enumerate() {
+                let Some((side, line)) = end_of(row) else {
+                    continue;
+                };
+                let visible = shown(h, r);
+                for (note, last) in notes.iter().zip(&mut last_shown) {
+                    if note.covers(side, line) {
+                        barred[h][r] |= note.is_block();
+                        if visible {
+                            *last = Some((h, r));
+                        }
+                    }
+                }
+            }
+        }
         let mut under: HashMap<(usize, usize), Vec<&Note>> = HashMap::new();
-        for note in &notes {
-            let last = view
-                .hunks
-                .iter()
-                .enumerate()
-                .flat_map(|(h, hunk)| {
-                    hunk.rows
-                        .iter()
-                        .enumerate()
-                        .map(move |(r, row)| (h, r, row))
-                })
-                .rfind(|&(h, r, row)| {
-                    shown(h, r) && anchor_of(row).is_some_and(|a| note.covers(a.side, a.line))
-                });
-            if let Some((h, r, _)) = last {
-                under.entry((h, r)).or_default().push(note);
+        for (note, last) in notes.iter().zip(last_shown) {
+            if let Some(at) = last {
+                under.entry(at).or_default().push(note);
             }
         }
         for (hunk_index, hunk) in view.hunks.iter().enumerate() {
@@ -1148,11 +1153,7 @@ impl App {
                     &mut out,
                     row_line(
                         row,
-                        anchor.as_ref().is_some_and(|a| {
-                            notes
-                                .iter()
-                                .any(|note| note.is_block() && note.covers(a.side, a.line))
-                        }),
+                        barred[hunk_index][row_index],
                         moved.is_some(),
                         self.search.as_deref(),
                         &self.palette,
@@ -1259,11 +1260,16 @@ fn find_all(text: &str, query: &str) -> Vec<Range<usize>> {
         .collect()
 }
 
+/// The line a diff row stands for: a removed row by its old line, the others by their new one.
+fn end_of(row: &Row) -> Option<End> {
+    match row.kind {
+        RowKind::Removed => Some((NoteSide::Old, row.old_line?)),
+        RowKind::Added | RowKind::Context => Some((NoteSide::New, row.new_line?)),
+    }
+}
+
 fn anchor_of(row: &Row) -> Option<Anchor> {
-    let (side, line) = match row.kind {
-        RowKind::Removed => (NoteSide::Old, row.old_line?),
-        RowKind::Added | RowKind::Context => (NoteSide::New, row.new_line?),
-    };
+    let (side, line) = end_of(row)?;
     Some(Anchor {
         side,
         line,
@@ -1434,12 +1440,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     app.diff_height = diff_area.height.saturating_sub(2) as usize;
     // Inside the borders, less the cursor's gutter.
     app.diff_width = diff_area.width.saturating_sub(3) as usize;
-    let lines = app.diff_view().lines;
-    app.cursor = app.cursor.min(lines.len().saturating_sub(1));
-    app.scroll = app.scroll.min(lines.len().saturating_sub(app.diff_height));
+    // Built once per frame: everything below that reads the diff pane reads this.
+    let view = app.diff_view();
+    app.cursor = app.cursor.min(view.lines.len().saturating_sub(1));
+    app.scroll = app
+        .scroll
+        .min(view.lines.len().saturating_sub(app.diff_height));
     app.keep_cursor_visible();
-    let selected = app.selection_span();
-    let lines: Vec<Line> = lines
+    let selected = app.selection_lines(&view);
+    let block_status = app.block_status(&view);
+    let cursor_anchor = app.cursor_anchor_in(&view);
+    let lines: Vec<Line> = view
+        .lines
         .into_iter()
         .enumerate()
         .map(|(i, line)| {
@@ -1477,11 +1489,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             "/{}   (Enter search · Esc cancel)",
             with_cursor(query, app.input_cursor)
         ),
-        (None, Some(message)) => match app.block_status() {
+        (None, Some(message)) => match block_status {
             Some(block) => format!("{block} · {message}"),
             None => message.clone(),
         },
-        (None, None) => app.block_status().unwrap_or_else(|| {
+        (None, None) => block_status.unwrap_or_else(|| {
             format!(
                 "{}{} · {reviewed}/{listed} reviewed{}",
                 drafts_status(&app.notes),
@@ -1514,7 +1526,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         };
         let title = match &app.input {
             Some(Input::General(_)) => " Note on the change as a whole ".to_string(),
-            _ => match (block_title, app.cursor_anchor()) {
+            _ => match (block_title, cursor_anchor) {
                 (Some(title), Some(_)) => title,
                 (_, Some((path, anchor))) if anchor.side == NoteSide::Old => {
                     format!(" Note on {path}, removed line {} ", anchor.line)
