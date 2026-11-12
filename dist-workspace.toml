@@ -25,3 +25,7 @@ formula = "declutter"
 # Publish the formula to the tap from CI, with the HOMEBREW_TAP_TOKEN secret (a token with
 # write access to NikolajMosbaek/homebrew-tap only).
 publish-jobs = ["homebrew"]
+
+# GitHub retired the macos-14 runner that dist 0.33 picks for Apple silicon.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
