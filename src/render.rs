@@ -22,7 +22,7 @@ fn print(files: &[FileReview], layers: Layers, numbered: bool) -> String {
     let mut out = String::new();
     let listed: Vec<&FileReview> = files
         .iter()
-        .filter(|file| file.is_visible(layers.tests))
+        .filter(|file| file.is_visible(layers))
         .collect();
     let moves = detect(&listed, layers.into());
     for (file_index, file) in listed.iter().enumerate() {

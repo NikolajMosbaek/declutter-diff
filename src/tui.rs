@@ -23,7 +23,7 @@ use crate::review::{ChangeStatus, Detection, FileReview, Layers, Summary};
 use crate::store::{End, Note, NoteSide, NoteStore, ReviewStore};
 
 /// Key help, most-used first: a narrow terminal cuts the end off. `?` shows them all.
-const HELP: &str = " ↑↓ move  ←→ pane  ]/[ change  }/{ file  / search  r reviewed  m note  c t i l f layers  a all  ? help  q quit";
+const HELP: &str = " ↑↓ move  ←→ pane  ]/[ change  }/{ file  / search  r reviewed  m note  c t i l f w layers  a all  ? help  q quit";
 
 /// A titled group of (keys, action) pairs on the `?` screen.
 type KeyGroup = (&'static str, &'static [(&'static str, &'static str)]);
@@ -74,6 +74,7 @@ const KEYS: [&[KeyGroup]; 2] = [
                 ("i  I", "imports"),
                 ("l  L", "logging"),
                 ("f  F", "formatting-only changes"),
+                ("w  W", "Markdown files"),
                 ("a", "all filters off / back on"),
                 ("M", "collapse moved blocks"),
                 ("s", "syntax colouring on / off"),
@@ -106,6 +107,7 @@ enum Layer {
     Imports,
     Logging,
     Formatting,
+    Markdown,
 }
 
 /// The line of a file a diff line stands for, so notes can be attached to it.
@@ -144,7 +146,7 @@ pub type Clipboard = fn(&str) -> bool;
 pub struct App {
     pub files: Vec<FileReview>,
     pub layers: Layers,
-    /// Indices into `files` of the files the test layer currently lists.
+    /// Indices into `files` of the files the file layers (tests, Markdown) currently list.
     visible: Vec<usize>,
     /// Position in the visible list.
     pub selected: usize,
@@ -253,12 +255,12 @@ impl App {
             .map(|&index| &self.files[index])
     }
 
-    /// Rebuilds the visible list after the test layer changed, keeping the selection on
-    /// the same file when it is still listed.
+    /// Rebuilds the visible list after a layer changed, keeping the selection on the
+    /// same file when it is still listed.
     fn refilter(&mut self) {
         let current = self.visible.get(self.selected).copied();
         self.visible = (0..self.files.len())
-            .filter(|&index| self.files[index].is_visible(self.layers.tests))
+            .filter(|&index| self.files[index].is_visible(self.layers))
             .collect();
         match current.and_then(|index| self.visible.iter().position(|&i| i == index)) {
             Some(position) => self.selected = position,
@@ -375,6 +377,8 @@ impl App {
             KeyCode::Char('L') => self.toggle_only(Layer::Logging),
             KeyCode::Char('f') => self.toggle_hidden(Layer::Formatting),
             KeyCode::Char('F') => self.toggle_only(Layer::Formatting),
+            KeyCode::Char('w') => self.toggle_hidden(Layer::Markdown),
+            KeyCode::Char('W') => self.toggle_only(Layer::Markdown),
             KeyCode::Char('s') => self.syntax = !self.syntax,
             KeyCode::Char('a') => self.toggle_all(),
             KeyCode::Char('M') => {
@@ -461,6 +465,7 @@ impl App {
             Layer::Imports => &mut self.layers.imports,
             Layer::Logging => &mut self.layers.logging,
             Layer::Formatting => &mut self.layers.formatting,
+            Layer::Markdown => &mut self.layers.markdown,
         }
     }
 
@@ -472,7 +477,7 @@ impl App {
             LayerMode::Shown => LayerMode::Hidden,
             LayerMode::Hidden | LayerMode::Only => LayerMode::Shown,
         };
-        self.layers_changed(layer, before);
+        self.layers_changed(before);
     }
 
     /// Shifted layer key: the layer alone; pressed again, back to what it was.
@@ -486,7 +491,7 @@ impl App {
             LayerMode::Only
         };
         *self.layer_mut(layer) = next;
-        self.layers_changed(layer, before);
+        self.layers_changed(before);
     }
 
     /// `a`: with any layer filtering, shows everything and remembers how it was; pressed
@@ -499,6 +504,7 @@ impl App {
             imports: mode,
             logging: mode,
             formatting: mode,
+            markdown: mode,
         };
         let (next, message) = if self.layers != all(LayerMode::Shown) {
             self.saved_layers = Some(self.layers);
@@ -514,7 +520,7 @@ impl App {
         };
         self.layers = next;
         self.before_only.clear();
-        self.layers_changed(Layer::Tests, before);
+        self.layers_changed(before);
         self.message = Some(message.to_string());
     }
 
@@ -525,10 +531,8 @@ impl App {
 
     /// Re-derives everything a layer change affects, keeping the cursor on the same line
     /// of the same file where that line is still shown.
-    fn layers_changed(&mut self, layer: Layer, (file, place): (Option<usize>, Option<Place>)) {
-        if layer == Layer::Tests {
-            self.refilter();
-        }
+    fn layers_changed(&mut self, (file, place): (Option<usize>, Option<Place>)) {
+        self.refilter();
         self.refresh_moves();
         if self.visible.get(self.selected).copied() == file {
             self.restore(place);
@@ -1045,12 +1049,10 @@ impl App {
             changes: Vec::new(),
         };
         let Some(file) = self.visible.get(position).map(|&index| &self.files[index]) else {
-            return message(match (self.files.is_empty(), self.layers.tests) {
-                (true, _) => "No changes.".to_string(),
-                (false, LayerMode::Hidden) => {
-                    "Every changed file is a test file. Press t to show tests.".to_string()
-                }
-                (false, _) => "No test files changed. Press T to show the other files.".to_string(),
+            return message(if self.files.is_empty() {
+                "No changes.".to_string()
+            } else {
+                nothing_listed(self.layers)
             });
         };
         let view = file.view(self.layers);
@@ -1631,6 +1633,21 @@ fn draw_help(frame: &mut Frame) {
     for area in [left_column, right_column] {
         frame.render_widget(Paragraph::new(columns.next().unwrap_or_default()), area);
     }
+}
+
+/// Why no file is listed although files changed — the file layers left them all out —
+/// and the key that brings them back.
+fn nothing_listed(layers: Layers) -> String {
+    use LayerMode::{Hidden, Only};
+    match (layers.tests, layers.markdown) {
+        (Only, Only) => "No test or Markdown files changed. Press a to show the other files.",
+        (Only, _) => "No test files changed. Press T to show the other files.",
+        (_, Only) => "No Markdown files changed. Press W to show the other files.",
+        (Hidden, Hidden) => "Every changed file is a test or Markdown file. Press a to show them.",
+        (Hidden, _) => "Every changed file is a test file. Press t to show tests.",
+        _ => "Every changed file is a Markdown file. Press w to show Markdown files.",
+    }
+    .to_string()
 }
 
 /// `text` with a block cursor drawn `cursor` characters in.

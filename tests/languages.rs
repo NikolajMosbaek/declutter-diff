@@ -180,11 +180,17 @@ fn the_test_layer_cuts_or_keeps_rust_test_blocks_in_a_source_file() {
         ]
     );
     assert!(
-        file.is_visible(LayerMode::Only),
+        file.is_visible(declutter::review::Layers {
+            tests: LayerMode::Only,
+            ..Default::default()
+        }),
         "listed when only tests are shown"
     );
     assert!(
-        file.is_visible(LayerMode::Hidden),
+        file.is_visible(declutter::review::Layers {
+            tests: LayerMode::Hidden,
+            ..Default::default()
+        }),
         "still listed when tests are hidden"
     );
 

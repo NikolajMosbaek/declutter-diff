@@ -7,6 +7,7 @@ use crate::classify::{Classified, classify};
 use crate::diff::{Hunk, RowKind, diff, filter_formatting};
 use crate::highlight::annotate;
 use crate::lang::Lang;
+use crate::markdown_files::is_markdown_file;
 use crate::project::{LayerMode, project};
 use crate::store::fingerprint;
 use crate::test_files::is_test_file;
@@ -214,6 +215,8 @@ pub struct FileReview {
     pub detection: Detection,
     /// The whole file is test code; the test layer is file-granular.
     pub is_test: bool,
+    /// A Markdown file; the Markdown layer is file-granular too.
+    pub is_markdown: bool,
     /// Identifies this exact change (path and both versions) for review marks.
     pub fingerprint: u64,
     old: String,
@@ -254,6 +257,7 @@ impl FileReview {
         };
 
         let is_test = is_test_file(&change.path, if new.is_empty() { &old } else { &new });
+        let is_markdown = is_markdown_file(&change.path);
         let fingerprint = fingerprint(&[&change.path, &old, &new]);
         FileReview {
             path: change.path,
@@ -261,6 +265,7 @@ impl FileReview {
             status: change.status,
             detection,
             is_test,
+            is_markdown,
             fingerprint,
             old,
             new,
@@ -295,9 +300,10 @@ impl FileReview {
     }
 
     fn hunks_for(&self, modes: DiffModes) -> Vec<Hunk> {
-        // A test file is test code from top to bottom: the test layer decides whether it
-        // is listed at all, never which of its lines are shown.
-        let modes = if self.is_test {
+        // A test file is test code from top to bottom, and a Markdown file has none: the
+        // test layer decides whether either is listed at all, never which of its lines
+        // are shown.
+        let modes = if self.is_test || self.is_markdown {
             DiffModes {
                 tests: LayerMode::Shown,
                 ..modes
@@ -352,14 +358,32 @@ impl FileReview {
         self.view(DiffModes::SHOWN).hunks.len()
     }
 
-    /// Whether the file is listed at all under this test-layer mode. A source file with
-    /// test blocks in it stays listed either way: hiding tests cuts the blocks out, and
-    /// showing only tests keeps just them.
-    pub fn is_visible(&self, tests: LayerMode) -> bool {
-        match tests {
-            LayerMode::Shown => true,
-            LayerMode::Hidden => !self.is_test,
-            LayerMode::Only => self.is_test || self.has_test_blocks(),
+    /// Whether the file is listed at all under the file layers, tests and Markdown. As
+    /// with the span layers, *only* wins: with any file layer on *only*, the files of
+    /// those layers are listed, whatever else is hidden. A source file with test blocks
+    /// in it stays listed when tests are hidden (the blocks are cut out) and is listed
+    /// when only tests are (just the blocks are kept).
+    pub fn is_visible(&self, layers: Layers) -> bool {
+        if layers.tests == LayerMode::Only || layers.markdown == LayerMode::Only {
+            (layers.tests == LayerMode::Only && (self.is_test || self.has_test_blocks()))
+                || (layers.markdown == LayerMode::Only && self.is_markdown)
+        } else {
+            self.hidden_by(layers).is_none()
+        }
+    }
+
+    /// The *hidden* file layer that leaves the file out, if any: tests before Markdown,
+    /// so a Markdown test file is counted once. None while a file layer is on *only*,
+    /// which wins.
+    fn hidden_by(&self, layers: Layers) -> Option<FileLayer> {
+        if layers.tests == LayerMode::Only || layers.markdown == LayerMode::Only {
+            None
+        } else if layers.tests == LayerMode::Hidden && self.is_test {
+            Some(FileLayer::Tests)
+        } else if layers.markdown == LayerMode::Hidden && self.is_markdown {
+            Some(FileLayer::Markdown)
+        } else {
+            None
         }
     }
 
@@ -417,6 +441,13 @@ fn count_hidden(full: &[Hunk], visible: &[Hunk]) -> usize {
         .count()
 }
 
+/// A layer made of whole files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileLayer {
+    Tests,
+    Markdown,
+}
+
 /// What the reviewer has chosen to see of each layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Layers {
@@ -425,6 +456,7 @@ pub struct Layers {
     pub imports: LayerMode,
     pub logging: LayerMode,
     pub formatting: LayerMode,
+    pub markdown: LayerMode,
 }
 
 impl Default for Layers {
@@ -435,6 +467,7 @@ impl Default for Layers {
             imports: LayerMode::Shown,
             logging: LayerMode::Shown,
             formatting: LayerMode::Shown,
+            markdown: LayerMode::Shown,
         }
     }
 }
@@ -448,8 +481,12 @@ pub struct Summary {
     pub hidden_hunks: usize,
     /// Files with changes, none of them visible under these layers.
     pub fully_hidden_files: usize,
-    /// Files left out by the test layer: test files when hidden, the rest when only.
+    /// Files left out by the file layers: test and Markdown files when hidden, the rest
+    /// when only.
     pub filtered_files: usize,
+    /// Of `filtered_files`, the Markdown files left out by hiding Markdown. A Markdown
+    /// file that is also a test file counts as a test file when tests are hidden too.
+    pub filtered_markdown_files: usize,
     pub unsupported_files: usize,
     pub partial_files: usize,
     /// Listed files with test blocks inside them (Rust's `#[cfg(test)]` modules).
@@ -460,8 +497,11 @@ impl Summary {
     pub fn new(files: &[FileReview], layers: Layers) -> Summary {
         let mut summary = Summary::default();
         for file in files {
-            if !file.is_visible(layers.tests) {
+            if !file.is_visible(layers) {
                 summary.filtered_files += 1;
+                if file.hidden_by(layers) == Some(FileLayer::Markdown) {
+                    summary.filtered_markdown_files += 1;
+                }
                 continue;
             }
             let view = file.view(layers);
@@ -491,6 +531,7 @@ impl Summary {
             ("imports", layers.imports),
             ("logging", layers.logging),
             ("formatting", layers.formatting),
+            ("markdown", layers.markdown),
         ]
         .into_iter()
         .filter(|(_, mode)| *mode != LayerMode::Shown)
@@ -548,18 +589,25 @@ impl Summary {
                 ));
             }
         }
-        match layers.tests {
-            LayerMode::Shown => {}
-            LayerMode::Hidden => parts.push(format!(
-                "{} test {} hidden",
-                self.filtered_files,
-                plural(self.filtered_files, "file")
-            )),
-            LayerMode::Only => parts.push(format!(
-                "{} non-test {} hidden",
-                self.filtered_files,
-                plural(self.filtered_files, "file")
-            )),
+        let files_hidden =
+            |count: usize, kind: &str| format!("{count} {kind} {} hidden", plural(count, "file"));
+        match (layers.tests, layers.markdown) {
+            (LayerMode::Only, LayerMode::Only) => {
+                parts.push(files_hidden(self.filtered_files, "other"));
+            }
+            (LayerMode::Only, _) => parts.push(files_hidden(self.filtered_files, "non-test")),
+            (_, LayerMode::Only) => {
+                parts.push(files_hidden(self.filtered_files, "non-markdown"));
+            }
+            (tests, markdown) => {
+                if tests == LayerMode::Hidden {
+                    let test_files = self.filtered_files - self.filtered_markdown_files;
+                    parts.push(files_hidden(test_files, "test"));
+                }
+                if markdown == LayerMode::Hidden {
+                    parts.push(files_hidden(self.filtered_markdown_files, "markdown"));
+                }
+            }
         }
         if self.unsupported_files > 0 {
             parts.push(format!(

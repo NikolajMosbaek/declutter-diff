@@ -29,6 +29,7 @@ Treat a diff as layers that can be switched on and off:
 | `i` | Imports | `import` / `use` / `#include` statements |
 | `l` | Logging | Statements that only call a logging API (`print`, `console.*`, `logger.*`, …) |
 | `f` | Formatting | Changes that only move whitespace: re-indent, re-space, re-wrap |
+| `w` | Markdown | Whole `.md` / `.markdown` files |
 
 Toggle comments off and the diff shows only code changes: comment-only hunks disappear,
 and a line that changed code *and* a trailing comment shows only the code change. A status
@@ -142,6 +143,20 @@ changes, with correct line numbers, and toggling back restores the full diff.
   GitHub review instead of a comment per note; a log of what was posted, with links.
 - Notes on a block of lines (`V` in the viewer, `--line 11-13` / `"end_line"` for agents),
   posted as one comment covering the range.
+- A Markdown layer (`w`, `--markdown`): whole `.md` / `.markdown` files, hidden or alone.
+
+### Decisions made while adding the Markdown layer
+
+- **Markdown is file-granular, like tests.** A file is Markdown by its extension (`.md`,
+  `.markdown`, any case); it is listed or left out as a whole and never changes another
+  file's diff.
+- **The file layers combine as the span layers do.** Hidden ones leave their files out
+  together; any on *only* wins, and lists the files of every *only* layer — `T` then `W`
+  shows the tests and the docs, not just Markdown test files.
+- **A Markdown test file (`Tests/README.md`) is counted once**, as a test file, when both
+  layers are hidden, so the status line's counts add up.
+- **The test layer cuts no lines out of a Markdown file.** With tests and Markdown both on
+  *only*, a README shows its whole diff rather than an empty one.
 
 ### Decisions made while opening notes to coding agents
 

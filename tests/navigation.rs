@@ -181,7 +181,9 @@ fn question_mark_lists_every_key_and_any_key_closes_it() {
     let mut app = App::new(vec![two_hunks("A.swift")], Layers::default());
     press(&mut app, KeyCode::Char('?'));
     let help = screen(&mut app);
-    for key in ["] [", "} {", "/  n  N", "c  C", "f  F", "M ", "Esc", "? "] {
+    for key in [
+        "] [", "} {", "/  n  N", "c  C", "f  F", "w  W", "M ", "Esc", "? ",
+    ] {
         assert!(help.contains(key), "{key} missing from help");
     }
 
@@ -259,6 +261,7 @@ fn a_turns_every_filter_off_and_back_on() {
         imports: LayerMode::Shown,
         logging: LayerMode::Shown,
         formatting: LayerMode::Shown,
+        markdown: LayerMode::Shown,
     };
     assert_eq!(app.layers, all_shown);
     assert!(

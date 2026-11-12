@@ -57,6 +57,7 @@ OPTIONS:
     --imports <MODE>     Start imports in MODE: shown (default), hidden, only
     --logging <MODE>     Start logging statements in MODE: shown (default), hidden, only
     --formatting <MODE>  Start whitespace-only changes in MODE: shown (default), hidden, only
+    --markdown <MODE>    Start Markdown files in MODE: shown (default), hidden, only
     -p, --print          Print the diff instead of opening the viewer
     -n, --line-numbers   Print the diff with each row's old and new line numbers
     --no-syntax          Start with syntax colouring off (s toggles it)
@@ -72,8 +73,8 @@ KEYS (viewer; press ? for the full list):
     /  n  N     search; next / previous match
     r           mark the file reviewed and go to the next one
     m  V  E  o  note a line, or a block (V, then j/k, m); copy all notes as a prompt; open in $EDITOR
-    c t i l f   hide / show comments, tests, imports, logging, formatting
-    C T I L F   show only that layer (again to go back)
+    c t i l f w hide / show comments, tests, imports, logging, formatting, Markdown files
+    C T I L F W show only that layer (again to go back)
     a           all filters off, and back on
     M           collapse moved blocks
     s           syntax colouring on / off
@@ -204,7 +205,8 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
                 };
                 args.base = Some(value);
             }
-            "--comments" | "--tests" | "--imports" | "--logging" | "--formatting" => {
+            "--comments" | "--tests" | "--imports" | "--logging" | "--formatting"
+            | "--markdown" => {
                 let Some(value) = inline.or_else(|| raw.next()) else {
                     bail!("{flag} needs a value: hidden, only or shown");
                 };
@@ -216,6 +218,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>> {
                     "--tests" => args.layers.tests = mode,
                     "--imports" => args.layers.imports = mode,
                     "--logging" => args.layers.logging = mode,
+                    "--markdown" => args.layers.markdown = mode,
                     _ => args.layers.formatting = mode,
                 }
             }

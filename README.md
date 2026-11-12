@@ -11,7 +11,8 @@ when you choose to.
 - **`c`** — comments gone, even the ones trailing a line of code, along with the blank
   lines they brought.
 - **`C`** — *only* the comments: check what the AI claims against what it wrote.
-- **`t` `i` `l` `f`** — tests, imports, logging and whitespace-only changes, hidden or alone.
+- **`t` `i` `l` `f` `w`** — tests, imports, logging, whitespace-only changes and Markdown
+  files, hidden or alone.
 - **`declutter <PR URL>`** — review a GitHub or Azure DevOps pull request, leave notes on
   lines, and post them as review comments when you quit.
 - **`declutter notes add`** — let a coding agent hand you its review findings as draft
@@ -129,7 +130,7 @@ drafts still stay).
 
 ## Layers
 
-Five layers, each shown, hidden or shown on its own:
+Six layers, each shown, hidden or shown on its own:
 
 - **Comments**: line and block comments and doc comments (Python docstrings, Rust `///`,
   KDoc, Go doc comments) in every supported language.
@@ -149,6 +150,8 @@ Five layers, each shown, hidden or shown on its own:
 - **Formatting**: changes that only move whitespace — re-indenting, re-spacing, re-wrapping
   a statement over more or fewer lines, added blank lines. When hidden, the new layout stays
   visible as context. Indentation counts as code in Python and in files without a grammar.
+- **Markdown**: whole `.md` and `.markdown` files — READMEs, changelogs, design docs. Like
+  test files, they leave the file list when hidden, and *only* lists nothing else.
 
 ## Supported languages
 
@@ -212,6 +215,7 @@ declutter notes [<target>] [--json]        # the notes as a prompt (or JSON), of
 declutter notes add <target> …             # add draft notes on a line or a block (--line 11-13)
 declutter notes post <target> [--yes]      # post a PR's notes without opening the viewer
 declutter --tests hidden                   # start with test files left out
+declutter --markdown hidden                # start with Markdown files left out
 ```
 
 - **Pull requests** — paste the URL from the browser. The PR is fetched into
@@ -275,6 +279,7 @@ Viewer keys, grouped as on the `?` screen:
 | `i` `I` | imports |
 | `l` `L` | logging |
 | `f` `F` | formatting-only changes |
+| `w` `W` | Markdown files |
 | `a` | all filters off (everything shown); press again to put them back |
 | `M` | collapse moved blocks to their one-line marker, or expand them |
 | `s` | syntax colouring on / off (`--no-syntax` starts with it off) |
@@ -284,6 +289,8 @@ shown), so you can flip comments on and off without losing your place.
 
 Layers combine: everything set to *hidden* is cut out together. A layer set to *only*
 wins — with comments on *only* you see just the comment changes, whatever else is hidden.
+The two file layers, tests and Markdown, pick files the same way: with both on *only*, the
+test files and the Markdown files are listed.
 
 **Moved code** (`M` collapses). A block of three or more lines removed in one place and added in another —
 same file or a different one, re-indented or not — is drawn in its own tint with a marker
@@ -320,7 +327,7 @@ file, which is the reviewed version unless you're reviewing an older range.
 ## Development
 
 ```sh
-cargo test                       # the whole suite (113 tests), under 10 seconds once built
+cargo test                       # the whole suite (191 tests), under 10 seconds once built
 cargo test --test navigation     # one area (file names below)
 cargo test brackets              # tests whose name contains "brackets"
 cargo clippy --all-targets       # lint; kept at zero warnings
@@ -345,6 +352,7 @@ What each test file covers:
 | `comments.rs` | Finding comments and docstrings in each language; hiding them without leaving gaps or false changes; line numbers staying true |
 | `languages.rs` | Go, Rust and Kotlin: comments, imports, logging (and what is *not* logging), Rust test blocks, test files, colours |
 | `test_layer.rs` | Which files count as tests; hiding them or showing only them |
+| `markdown_layer.rs` | Which files count as Markdown; hiding them or showing only them, also together with tests |
 | `import_logging.rs` | Finding imports and logging-only statements; layers combining, and *only* winning over *hidden* |
 | `formatting.rs` | Telling whitespace-only changes from real ones — including Python, where indentation is code |
 | `print.rs` | `--print` output, and line numbers that stay right with rows hidden |

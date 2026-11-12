@@ -7,7 +7,8 @@
 //! line that changed code and a trailing comment show only the code change.
 //!
 //! Tests are a file-level layer: a changed file is test code by path convention or
-//! by importing a test framework, and is listed or left out as a whole.
+//! by importing a test framework, and is listed or left out as a whole. So are
+//! Markdown files, by extension.
 
 pub mod block;
 pub mod classify;
@@ -16,6 +17,7 @@ pub mod editor;
 pub mod git;
 pub mod highlight;
 pub mod lang;
+pub mod markdown_files;
 pub mod moves;
 pub mod palette;
 pub mod pr;
